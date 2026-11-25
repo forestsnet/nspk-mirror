@@ -129,6 +129,11 @@ button { font: inherit; color: inherit; }
 }
 .merchant span { color: var(--muted); }
 .merchant b { overflow: hidden; font-weight: 600; letter-spacing: 0.02em; text-overflow: ellipsis; white-space: nowrap; }
+.merchant b a { color: inherit; text-decoration: none; border-bottom: 1px solid rgb(255 255 255 / 0.25); }
+@media (hover: hover) { .merchant b a:hover { border-bottom-color: var(--accent); } }
+/* Круг аватарки концентричен скруглению плашки: радиус плашки 18 = 12 + отступ 6. */
+.avatar { flex: none; width: 24px; height: 24px; border-radius: 50%; object-fit: cover; background: #fff; }
+.merchant:has(.avatar), .state-meta:has(.avatar) { padding-left: 6px; }
 
 /* Сумма, получатель и таймер прямо над окном оплаты */
 .summary { order: -1; display: flex; flex-direction: column; align-items: center; text-align: center; }
@@ -319,21 +324,33 @@ button { font: inherit; color: inherit; }
   transition: background-color 0.15s, color 0.15s;
 }
 .seg button[aria-selected="true"] { background: var(--panel-3); color: var(--text); box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.06); }
+/* Скругления концентричны: внешний радиус = внутренний + отступ между ними. */
 .qr-frame {
+  --img-r: 6px;
+  --pad: 12px;
+  --frame-r: calc(var(--img-r) + var(--pad));
+  --gap: 10px;
   position: relative;
-  margin: 12px 0 4px;
-  padding: 12px;
-  border-radius: 20px;
+  margin: 14px 0 6px;
+  padding: var(--pad);
+  border-radius: var(--frame-r);
   background: #fff;
   box-shadow: 0 30px 70px -30px rgb(255 224 58 / 0.4);
 }
-.qr-img { border-radius: 4px; image-rendering: pixelated; }
+.qr-img { border-radius: var(--img-r); image-rendering: pixelated; }
 .qr-img:not([src]) { visibility: hidden; }
-.corner { position: absolute; width: 26px; height: 26px; border: 3px solid var(--accent); }
-.corner.tl { top: -10px; left: -10px; border-right: 0; border-bottom: 0; border-top-left-radius: 16px; }
-.corner.tr { top: -10px; right: -10px; border-bottom: 0; border-left: 0; border-top-right-radius: 16px; }
-.corner.bl { bottom: -10px; left: -10px; border-top: 0; border-right: 0; border-bottom-left-radius: 16px; }
-.corner.br { right: -10px; bottom: -10px; border-top: 0; border-left: 0; border-bottom-right-radius: 16px; }
+/* Уголки сканера стоят в --gap от рамки, поэтому их радиус — радиус рамки плюс --gap. */
+.corner {
+  --corner-r: calc(var(--frame-r) + var(--gap));
+  position: absolute;
+  width: calc(var(--corner-r) + 14px);
+  height: calc(var(--corner-r) + 14px);
+  border: 3px solid var(--accent);
+}
+.corner.tl { top: calc(var(--gap) * -1); left: calc(var(--gap) * -1); border-right: 0; border-bottom: 0; border-top-left-radius: var(--corner-r); }
+.corner.tr { top: calc(var(--gap) * -1); right: calc(var(--gap) * -1); border-bottom: 0; border-left: 0; border-top-right-radius: var(--corner-r); }
+.corner.bl { bottom: calc(var(--gap) * -1); left: calc(var(--gap) * -1); border-top: 0; border-right: 0; border-bottom-left-radius: var(--corner-r); }
+.corner.br { right: calc(var(--gap) * -1); bottom: calc(var(--gap) * -1); border-top: 0; border-left: 0; border-bottom-right-radius: var(--corner-r); }
 .scan {
   position: absolute;
   top: 10%;
@@ -471,7 +488,11 @@ button { font: inherit; color: inherit; }
 .state[data-tone="danger"] { --tone: 255 122 89; }
 .state[data-tone="accent"] { --tone: 255 224 58; }
 .state[data-tone="muted"] { --tone: 154 160 172; }
+.state[data-tone="ok"] { --tone: 61 220 132; }
+.state-countdown { margin: 14px 0 0; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
 .state-art {
+  --frame-r: 32px;
+  --gap: 12px;
   position: relative;
   display: grid;
   place-items: center;
@@ -479,19 +500,18 @@ button { font: inherit; color: inherit; }
   height: 148px;
   margin: 18px 0 32px;
   border: 1px solid var(--line);
-  border-radius: 36px;
+  border-radius: var(--frame-r);
   background: radial-gradient(70% 70% at 50% 35%, rgb(var(--tone) / 0.16), transparent 70%), var(--panel-2);
   box-shadow: 0 34px 90px -34px rgb(var(--tone) / 0.55), inset 0 1px 0 rgb(255 255 255 / 0.05);
 }
-.state-art .corner { width: 30px; height: 30px; border-color: rgb(var(--tone)); }
-.state-art .corner.tl { top: -13px; left: -13px; border-top-left-radius: 22px; }
-.state-art .corner.tr { top: -13px; right: -13px; border-top-right-radius: 22px; }
-.state-art .corner.bl { bottom: -13px; left: -13px; border-bottom-left-radius: 22px; }
-.state-art .corner.br { right: -13px; bottom: -13px; border-bottom-right-radius: 22px; }
+.state-art .corner { border-color: rgb(var(--tone)); }
 .state-icon { width: 60px; height: 60px; color: rgb(var(--tone)); }
 .state-title { margin: 0 0 12px; font: 700 26px/1.15 var(--display); letter-spacing: -0.02em; text-wrap: balance; }
 .state-text { max-width: 34ch; margin: 0; color: var(--muted); font-size: 15px; text-wrap: balance; }
 .state-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   margin: 18px 0 0;
   padding: 6px 13px;
   border: 1px solid var(--line);

@@ -11,6 +11,7 @@ services:
       ALLOWED_MERCHANTS: ${ALLOWED_MERCHANTS:-}
       MERCHANT_STRICT: ${MERCHANT_STRICT:-0}
       MIRROR_SECRET: ${MIRROR_SECRET:-}
+      RETURN_KEY: ${RETURN_KEY:-}
     volumes:
       - cache:/var/cache/nspk-mirror
     networks:

@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 putenv('MIRROR_SECRET=test-secret-0123456789abcdef');
+putenv('RETURN_KEY=' . str_repeat('ab', 32));
 
 require __DIR__ . '/../src/rewrite.php';
 require __DIR__ . '/../src/upstream.php';
@@ -10,9 +11,14 @@ require __DIR__ . '/../src/banks.php';
 require __DIR__ . '/../src/logo.php';
 require __DIR__ . '/../src/pow.php';
 require __DIR__ . '/../src/link.php';
+require __DIR__ . '/../src/ret.php';
 require __DIR__ . '/../src/page.php';
 
 use function NspkMirror\amount_parts;
+use function NspkMirror\open_return_token;
+use function NspkMirror\return_info;
+use function NspkMirror\return_key;
+use function NspkMirror\seal_return_token;
 use function NspkMirror\bank_link;
 use function NspkMirror\clean_query;
 use function NspkMirror\initial;
@@ -266,15 +272,15 @@ check('config empty → defaults', parse_api_config('')['params'], POW_DEFAULTS)
 
 // Ответы payment-link.
 $errors = parse_api_config('')['errors'];
-check('link ok', parse_link_response(200, '{"code":"RQ00000","message":"ok","data":{"brandName":"FORESTSNET.CLOUD","amount":"15630"}}', $errors),
-    ['status' => 'ok', 'amount' => '15630', 'amountLabel' => '156,30', 'merchant' => 'FORESTSNET.CLOUD']);
+check('link ok', parse_link_response(200, '{"code":"RQ00000","message":"ok","data":{"brandName":"SHOP.EXAMPLE","amount":"15630"}}', $errors),
+    ['status' => 'ok', 'amount' => '15630', 'amountLabel' => '156,30', 'merchant' => 'SHOP.EXAMPLE']);
 check('link ok without amount', parse_link_response(200, '{"code":"RQ00000","data":{"brandName":"Магазин"}}', $errors), ['status' => 'ok', 'merchant' => 'Магазин']);
 check('link expired', parse_link_response(400, '{"code":"RQ05014","message":"Значение uniQrId не найдено","data":null}', $errors)['expired'] ?? null, true);
 check('link payment started', [parse_link_response(400, '{"code":"RQ05301"}', $errors)['status'] ?? null, parse_link_response(400, '{"code":"RQ05301"}', $errors)['expired'] ?? null], ['rejected', false]);
 check('link pow rejected', parse_link_response(403, '', $errors), ['status' => 'error']);
 check('format amount', [format_amount(15630), format_amount(150000), format_amount(5)], ['156,30', "1\u{202F}500", '0,05']);
-check('link ok with ids', parse_link_response(200, '{"code":"RQ00000","data":{"amount":"100","merchantId":"MA0007117316","legalId":"LB0003004344"}}', $errors),
-    ['status' => 'ok', 'amount' => '100', 'amountLabel' => '1', 'merchantId' => 'MA0007117316', 'legalId' => 'LB0003004344']);
+check('link ok with ids', parse_link_response(200, '{"code":"RQ00000","data":{"amount":"100","merchantId":"MA0000001234","legalId":"LB0000005678"}}', $errors),
+    ['status' => 'ok', 'amount' => '100', 'amountLabel' => '1', 'merchantId' => 'MA0000001234', 'legalId' => 'LB0000005678']);
 
 // Параметры зеркала mx_* не уходят в банк, но остаются в адресе самой страницы.
 check('query drops mx_', clean_query('?type=02&mx_exp=1764030000&sum=100'), '?type=02&sum=100');
@@ -286,19 +292,19 @@ check('expires too far', expires_in('?mx_exp=1999999999', 1764030000), null);
 check('expires missing', expires_in('?type=02', 1764030000), null);
 
 // Антифрод: список мерчантов и экран вместо оплаты.
-$okInfo = ['status' => 'ok', 'merchant' => 'FORESTSNET.CLOUD', 'merchantId' => 'MA0007117316', 'legalId' => 'LB0003004344'];
-check('merchant by id', merchant_allowed($okInfo, ['MA0007117316']), true);
-check('merchant by legal id', merchant_allowed($okInfo, ['LB0003004344']), true);
+$okInfo = ['status' => 'ok', 'merchant' => 'SHOP.EXAMPLE', 'merchantId' => 'MA0000001234', 'legalId' => 'LB0000005678'];
+check('merchant by id', merchant_allowed($okInfo, ['MA0000001234']), true);
+check('merchant by legal id', merchant_allowed($okInfo, ['LB0000005678']), true);
 check('merchant foreign', merchant_allowed($okInfo, ['MA0000000001']), false);
 check('merchant no list', merchant_allowed($okInfo, []), true);
-check('state ok', link_state($okInfo, ['MA0007117316'], false), null);
+check('state ok', link_state($okInfo, ['MA0000001234'], false), null);
 check('state foreign merchant → invalid', link_state($okInfo, ['MA0000000001'], false), ['kind' => 'invalid']);
 check('state expired', link_state(['status' => 'rejected', 'code' => 'RQ05014', 'message' => 'm', 'expired' => true], [], false)['kind'] ?? null, 'expired');
 check('state started', link_state(['status' => 'rejected', 'code' => 'RQ05301', 'message' => 'm', 'expired' => false], [], false)['kind'] ?? null, 'started');
 check('state declined', link_state(['status' => 'rejected', 'code' => 'RQ05058', 'message' => 'm', 'expired' => false], [], false)['kind'] ?? null, 'error');
-check('state nspk down, open', link_state(['status' => 'error'], ['MA0007117316'], false), null);
-check('state nspk down, strict', link_state(['status' => 'error'], ['MA0007117316'], true), ['kind' => 'unavailable']);
-check('public info hides ids', public_link_info($okInfo, null), ['status' => 'ok', 'merchant' => 'FORESTSNET.CLOUD']);
+check('state nspk down, open', link_state(['status' => 'error'], ['MA0000001234'], false), null);
+check('state nspk down, strict', link_state(['status' => 'error'], ['MA0000001234'], true), ['kind' => 'unavailable']);
+check('public info hides ids', public_link_info($okInfo, null), ['status' => 'ok', 'merchant' => 'SHOP.EXAMPLE']);
 check('public info rejected', public_link_info($okInfo, ['kind' => 'expired', 'code' => 'RQ05014', 'message' => 'm']),
     ['status' => 'rejected', 'state' => 'expired', 'code' => 'RQ05014', 'message' => 'm']);
 check('link sig', link_sig('BD1'), substr(hash_hmac('sha256', 'BD1', 'test-secret-0123456789abcdef'), 0, 24));
@@ -309,6 +315,41 @@ check('state page code', str_contains($stateHtml, 'Код НСПК RQ05014'), tr
 check('state page marked', str_contains($stateHtml, 'class="is-mobile is-state"'), true);
 check('state page without banks and qr', str_contains($stateHtml, 'bank1000') || str_contains($stateHtml, 'id="qr"'), false);
 check('page has state templates', str_contains($html, '<template id="state-expired">') && str_contains($html, '<template id="state-invalid">'), true);
+
+// Неизвестный код НСПК не теряется: он идёт в ответ и даёт экран «Оплатить не получится».
+check('link error keeps code', parse_link_response(400, '{"code":"RQ09999"}', $errors), ['status' => 'error', 'code' => 'RQ09999']);
+check('state unknown code → error', link_state(['status' => 'error', 'code' => 'RQ09999'], [], false)['kind'] ?? null, 'error');
+
+// Токен возврата mx_r: AES-256-GCM, привязан к QRC_ID.
+$rk = (string)return_key();
+$retData = ['ok' => 'https://shop.example/ok?o=1', 'fail' => 'https://shop.example/fail', 'shop' => 'https://shop.example', 'avatar' => 'https://shop.example/logo.png'];
+$tok = seal_return_token($retData, $id, $rk);
+check('return key from hex', strlen($rk), 32);
+check('token roundtrip', open_return_token($tok, $id, $rk), $retData);
+check('token bound to its QR', open_return_token($tok, 'BD20000000000000000000000000000X', $rk), null);
+check('token tampered', open_return_token(substr($tok, 0, -2) . (substr($tok, -2) === 'AA' ? 'AB' : 'AA'), $id, $rk), null);
+check('token only fail', open_return_token(seal_return_token(['fail' => 'https://shop.example/fail'], $id, $rk), $id, $rk),
+    ['ok' => '', 'fail' => 'https://shop.example/fail', 'shop' => '', 'avatar' => '']);
+check('token javascript: rejected', open_return_token(seal_return_token(['ok' => 'javascript:alert(1)'], $id, $rk), $id, $rk), null);
+check('token garbage', open_return_token('not*a*token', $id, $rk), null);
+check('return info from query', return_info('?mx_exp=1&mx_r=' . $tok, $id)['shop'] ?? null, 'https://shop.example');
+check('return info absent', return_info('?type=02', $id), null);
+
+$retPage = render_page([
+    'qrcId' => $id,
+    'banks' => [$banks[0] + ['link' => bank_link($banks[0], $id, '')]],
+    'amount' => null,
+    'nspkUrl' => "https://qr.nspk.ru/$id",
+    'pageUrl' => "https://sbp.example.com/$id",
+    'fallbackUrl' => "/nspk/$id",
+    'mobile' => false,
+    'ret' => return_info('?mx_r=' . $tok, $id),
+]);
+check('page return flags only', str_contains($retPage, 'data-ret-ok="1"') && str_contains($retPage, 'data-ret-avatar="1"'), true);
+check('page hides return urls', str_contains($retPage, 'shop.example/ok') || str_contains($retPage, 'shop.example/fail') || str_contains($retPage, 'logo.png'), false);
+check('page avatar via proxy', str_contains($retPage, '/a/' . $id . '?t='), true);
+check('page shop link with host as name', str_contains($retPage, 'href="https://shop.example" target="_blank" rel="noopener">shop.example</a>'), true);
+check('page paid template', str_contains($retPage, '<template id="state-paid">'), true);
 
 echo $fails ? "\n$fails failed\n" : "\nall passed\n";
 exit($fails ? 1 : 0);

@@ -55,6 +55,11 @@ function link_info(string $qrcId, string $userAgent, int $timeout = 6): array
     ], pow_headers($config['params'])), null, $timeout);
 
     $info = parse_link_response($up['status'], $up['body'], $config['errors']);
+    // Смена кода по QR в лог: так видно, как НСПК отражает оплату (RQ00000 → RQ05301 → …).
+    $previous = $copy !== null ? json_decode($copy['body'], true) : null;
+    if (is_array($previous) && link_code($previous) !== link_code($info)) {
+        error_log(sprintf('nspk-mirror: link %s %s → %s', $qrcId, link_code($previous), link_code($info)));
+    }
     if ($info['status'] === 'error') {
         error_log(sprintf('nspk-mirror: payment-link %s: HTTP %d %s', $qrcId, $up['status'], $up['error'] ?: substr($up['body'], 0, 200)));
     }
@@ -62,6 +67,12 @@ function link_info(string $qrcId, string $userAgent, int $timeout = 6): array
     $ttl = ['ok' => LINK_OK_TTL, 'rejected' => LINK_REJECTED_TTL][$info['status']] ?? LINK_ERROR_TTL;
     cache_write($key, (string)json_encode($info + ['expires' => time() + $ttl], JSON_UNESCAPED_UNICODE), 'application/json');
     return $info;
+}
+
+/** @param array{status: string, code?: string} $info */
+function link_code(array $info): string
+{
+    return $info['status'] === 'ok' ? 'RQ00000' : (string)($info['code'] ?? $info['status']);
 }
 
 /**
@@ -81,6 +92,10 @@ function link_state(array $info, array $allowed, bool $strict): ?array
         $code = (string)($info['code'] ?? '');
         $kind = !empty($info['expired']) ? 'expired' : (in_array($code, STARTED_CODES, true) ? 'started' : 'error');
         return ['kind' => $kind, 'code' => $code, 'message' => (string)($info['message'] ?? '')];
+    }
+    // НСПК ответила кодом, которого нет в её справочнике: страница НСПК в этом случае тоже показывает ошибку.
+    if (preg_match('/^RQ\d{5}$/', (string)($info['code'] ?? ''))) {
+        return ['kind' => 'error', 'code' => $info['code'], 'message' => ''];
     }
     return $strict && $allowed !== [] ? ['kind' => 'unavailable'] : null;
 }
@@ -230,5 +245,5 @@ function parse_link_response(int $status, string $body, array $errors): array
     if (isset($errors[$code])) {
         return ['status' => 'rejected', 'code' => $code, 'message' => $errors[$code], 'expired' => in_array($code, EXPIRED_CODES, true)];
     }
-    return ['status' => 'error'];
+    return preg_match('/^RQ\d{5}$/', $code) ? ['status' => 'error', 'code' => $code] : ['status' => 'error'];
 }

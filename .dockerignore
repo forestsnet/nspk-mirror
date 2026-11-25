@@ -7,3 +7,5 @@ node_modules
 docker-compose*.yml
 README.md
 tests/e2e.cjs
+.github
+LICENSE

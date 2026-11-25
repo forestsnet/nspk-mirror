@@ -10,6 +10,8 @@
 
 - [Как это работает](#как-это-работает)
   - [Параметры ссылки для зеркала](#параметры-ссылки-для-зеркала)
+  - [Возврат в магазин](#возврат-в-магазин)
+  - [Статус оплаты](#статус-оплаты)
   - [Сумма и получатель по ID](#сумма-и-получатель-по-id)
   - [Антифрод](#антифрод)
   - [Сборка JS и CSS](#сборка-js-и-css)
@@ -29,6 +31,7 @@
 - [Неисправности](#неисправности)
 - [Устройство страницы НСПК](#устройство-страницы-нспк)
 - [Сторонние файлы](#сторонние-файлы)
+- [Лицензия](#лицензия)
 
 ## Как это работает
 
@@ -61,30 +64,127 @@ https://sbp.example.com/BD10103IQ18O3ISP8RGAM6FN3AP1N0GH?type=02&sum=15630&cur=R
 | «Оплатить не получится» | НСПК отклонила операцию, текст её | 200 |
 | «Не удалось проверить ссылку» | НСПК не ответила, а включён `MERCHANT_STRICT` | 503 |
 
-Пока страница открыта, она перепроверяет ссылку раз в 30 секунд и при возвращении во вкладку, например из приложения банка, и меняет экран на лету.
+Пока страница открыта, она перепроверяет ссылку у НСПК: раз в 30 секунд, а три минуты после тапа по банку, показа QR или возврата во вкладку, например из приложения банка, раз в 4 секунды. Экран меняется на лету, см. [Статус оплаты](#статус-оплаты).
 
 ### Параметры ссылки для зеркала
 
-Параметры с префиксом `mx_` читает только зеркало, в ссылки в банки и на страницу НСПК они не попадают.
+Параметры с префиксом `mx_` читает только зеркало, в ссылки в банки и на страницу НСПК они не попадают. Все необязательны.
 
 | Параметр | Что делает |
 |---|---|
 | `mx_exp` | Unix-время, когда QR перестанет действовать. Страница показывает «Оплатите в течение 04:59» с полосой, на нуле меняет экран на «Время на оплату вышло». Уже прошедший срок сразу даёт этот экран |
+| `mx_r` | Зашифрованные адреса: куда вернуть при успехе и при неуспехе, адрес магазина и его аватарка, см. [Возврат в магазин](#возврат-в-магазин) |
 
 НСПК срок жизни QR не отдаёт, его знает шлюз или проект при создании платежа:
 
 ```
-https://sbp.example.com/BD10105UUI16TRC29O6OL4M6ACU7STG4?mx_exp=1764030000
+https://sbp.example.com/BD10103IQ18O3ISP8RGAM6FN3AP1N0GH?mx_exp=1795571200&mx_r=64QdKm1I8YFvXEGT…
 ```
 
 Отсчёт идёт от секунд, которые посчитал сервер, поэтому неточные часы телефона его не сбивают.
+
+### Возврат в магазин
+
+`mx_r` — четыре необязательных адреса, зашифрованных ключом `RETURN_KEY`. Ключ один на зеркало и проекты, которые собирают ссылки:
+
+```bash
+openssl rand -hex 32
+```
+
+| Поле | Зачем |
+|---|---|
+| `ok` | Куда вернуть после оплаты |
+| `fail` | Куда вернуть, если QR истёк или банк отклонил оплату |
+| `shop` | Адрес магазина. Имя получателя становится ссылкой, и туда ведёт «Вернуться в магазин», если нужного из двух адресов выше нет |
+| `avatar` | Картинка магазина в плашке получателя: PNG, JPEG или GIF. Зеркало скачивает её само, с проверкой сертификата, и ужимает под 24, 48 и 72 px |
+
+Формат: `base64url(nonce ‖ шифртекст ‖ тег)` без `=`, AES-256-GCM, nonce 12 байт, тег 16 байт, дополнительные данные — QRC_ID ссылки. Открытый текст — поля `ok`, `fail`, `shop`, `avatar` через перевод строки, пустое поле остаётся пустой строкой, хвост из пустых можно опустить. Из-за QRC_ID в дополнительных данных токен от одной ссылки не подойдёт к другой. Адреса не попадают в HTML: страница знает только, какие из них есть, а уводит через `/r/<QRC_ID>`, который сам расшифровывает токен и отвечает 303.
+
+PHP:
+
+```php
+function mx_r(string $qrcId, string $keyHex, array $f): string
+{
+    $plain = rtrim(implode("\n", [$f['ok'] ?? '', $f['fail'] ?? '', $f['shop'] ?? '', $f['avatar'] ?? '']), "\n");
+    $nonce = random_bytes(12);
+    $ct = openssl_encrypt($plain, 'aes-256-gcm', hex2bin($keyHex), OPENSSL_RAW_DATA, $nonce, $tag, $qrcId, 16);
+    return rtrim(strtr(base64_encode($nonce . $ct . $tag), '+/', '-_'), '=');
+}
+```
+
+Python, пакет `cryptography`:
+
+```python
+import base64, os
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+def mx_r(qrc_id: str, key_hex: str, ok="", fail="", shop="", avatar="") -> str:
+    plain = "\n".join([ok, fail, shop, avatar]).rstrip("\n").encode()
+    nonce = os.urandom(12)
+    sealed = AESGCM(bytes.fromhex(key_hex)).encrypt(nonce, plain, qrc_id.encode())
+    return base64.urlsafe_b64encode(nonce + sealed).rstrip(b"=").decode()
+```
+
+Node.js:
+
+```js
+const crypto = require('crypto');
+
+function mxR(qrcId, keyHex, { ok = '', fail = '', shop = '', avatar = '' } = {}) {
+  const nonce = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', Buffer.from(keyHex, 'hex'), nonce);
+  cipher.setAAD(Buffer.from(qrcId));
+  const plain = [ok, fail, shop, avatar].join('\n').replace(/\n+$/, '');
+  const ct = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
+  return Buffer.concat([nonce, ct, cipher.getAuthTag()]).toString('base64url');
+}
+```
+
+Java:
+
+```java
+static String mxR(String qrcId, byte[] key, String ok, String fail, String shop, String avatar) throws Exception {
+    String plain = String.join("\n", ok, fail, shop, avatar).replaceAll("\n+$", "");
+    byte[] nonce = new byte[12];
+    new SecureRandom().nextBytes(nonce);
+    Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+    cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"), new GCMParameterSpec(128, nonce));
+    cipher.updateAAD(qrcId.getBytes(StandardCharsets.UTF_8));
+    byte[] sealed = cipher.doFinal(plain.getBytes(StandardCharsets.UTF_8));
+    byte[] token = ByteBuffer.allocate(12 + sealed.length).put(nonce).put(sealed).array();
+    return Base64.getUrlEncoder().withoutPadding().encodeToString(token);
+}
+```
+
+Проверить ключ и адреса без своего кода:
+
+```bash
+docker compose exec mirror php /var/www/bin/return-token.php <QRC_ID> 'ok=https://shop.example/ok?o=42' 'fail=https://shop.example/fail' 'shop=https://shop.example' 'avatar=https://shop.example/logo.png'
+```
+
+Токен на все четыре адреса занимает около 190 символов.
+
+### Статус оплаты
+
+Явного «оплачено» НСПК не отдаёт: в ответе по QR есть сумма, вывеска и ID мерчанта, а статуса платежа нет. Страница следит за тем, что НСПК всё-таки сообщает:
+
+| Что видит страница | Экран | Возврат |
+|---|---|---|
+| «оплата уже началась» (RQ05301, RQ05022) | «Оплата уже идёт», проверка продолжается | нет |
+| после этого QR перестал ждать оплаты | «Оплата завершена» | на `ok` через 3 секунды |
+| QR снова ждёт оплаты | возвращается страница оплаты | нет |
+| QR истёк без начатой оплаты или вышел `mx_exp` | «Время на оплату вышло» | на `fail` через 5 секунд |
+
+Если нужного адреса нет, кнопка «Вернуться в магазин» ведёт на `shop`, а без `shop` остаётся «Вернуться назад» по истории браузера.
+
+Страница успеха в магазине обязана сама проверить статус заказа. «Оплата завершена» здесь вывод из кодов НСПК, а не подтверждение банка, и адрес `ok` можно открыть руками. Каждая смена кода по QR пишется в лог строкой `link <QRC_ID> RQ00000 → RQ05301`, по ней видно, как НСПК отражает настоящие платежи.
 
 ### Сумма и получатель по ID
 
 `GET upc.cbrpay.ru/v1/payment-link/<QRC_ID>` отдаёт сумму в копейках и название получателя, но только с proof-of-work в заголовках `X-Token-*`, без него ответ 403. Зеркало считает PoW само на сервере (`src/pow.php`):
 
-- цепочка из `maxPowCount` хешей SipHash-2-4 от строки `nonce;guid;время;прошлый хеш`, каждый по модулю меньше `difficulty`;
-- параметры (`key`, `difficulty`, `maxPowCount`, `maxTimeThresholdMs`, `paramsVersion`) и адрес API берутся из `proxyapp/apiConfig.json` НСПК со сверкой рамок, при сбое из значений на 25.11.2026;
+- цепочка из `maxPowCount` хешей SipHash-2-4 от строки `nonce;guid;время;прошлый хеш`, каждый по модулю меньше `difficulty`.
+- параметры (`key`, `difficulty`, `maxPowCount`, `maxTimeThresholdMs`, `paramsVersion`) и адрес API берутся из `proxyapp/apiConfig.json` НСПК со сверкой рамок, при сбое из значений на 25.11.2026.
 - реализация сверена с эталонными векторами SipHash и с JS самой страницы НСПК, цепочка считается около 30 мс.
 
 Ответ кэшируется: успех на 30 секунд, отказ НСПК на минуту, неответ на 10 секунд. В заголовках к НСПК уходят отметки времени, поэтому часы сервера должны идти верно (NTP).
@@ -96,7 +196,7 @@ https://sbp.example.com/BD10105UUI16TRC29O6OL4M6ACU7STG4?mx_exp=1764030000
 - **Список мерчантов.** НСПК в ответе отдаёт `merchantId` и `legalId`. Зеркало показывает оплату только тем, кто есть в `ALLOWED_MERCHANTS`, чужой QR получает экран «Ссылка недействительна», и в лог пишется строка `blocked <QRC_ID> merchant=… legal=… brand=…`. То же действует для `/nspk/<QRC_ID>`. Свои ID показывает `bin/link.php` по любой своей ссылке на оплату:
 
 ```bash
-docker compose exec -u www-data mirror php /var/www/bin/link.php BD10105UUI16TRC29O6OL4M6ACU7STG4
+docker compose exec -u www-data mirror php /var/www/bin/link.php <QRC_ID>
 ```
 
 - **Неответ НСПК.** Если проверить мерчанта не удалось, по умолчанию оплата показывается, чтобы сбой НСПК не останавливал платежи. `MERCHANT_STRICT=1` в этом случае показывает «Не удалось проверить ссылку».
@@ -114,6 +214,8 @@ docker compose exec -u www-data mirror php /var/www/bin/link.php BD10105UUI16TRC
 |---|---|
 | `/<QRC_ID>` | Свою страницу выбора банка или экран вместо оплаты |
 | `/api/link/<QRC_ID>?s=<подпись>` | JSON с суммой и получателем (`status: ok`) или экраном для отказа (`status: rejected`). Без подписи со страницы зеркала 403 |
+| `/r/<QRC_ID>?t=<mx_r>&to={ok,fail,shop}` | 303 на адрес магазина из токена. Токен от другого QR или без ключа — 404 |
+| `/a/<QRC_ID>?t=<mx_r>&s={24,48,72}` | Аватарка магазина из токена, ужатая под размер |
 | `/logo/{40,80,120}/bankXXXXXXXXXXXX.png` | Логотипы банков точно под плитку для экранов ×1, ×2, ×3 |
 | `/nspk/<QRC_ID>` | Страницу НСПК целиком, запасной вариант. Ссылка на неё есть в блоке «Не работает оплата?» |
 | `/proxyapp/…`, `/static/…`, `/js/…`, `/woff2/…` | Статику НСПК через прокси, картинки и шрифты из дискового кэша |
@@ -311,6 +413,7 @@ server {
 | `ALLOWED_MERCHANTS` | пусто | `merchantId` или `legalId` через запятую, чьи QR показывает зеркало. Пусто — любой QR |
 | `MERCHANT_STRICT` | `0` | `1` — не показывать оплату, если НСПК не ответила и мерчанта не проверить |
 | `MIRROR_SECRET` | пусто | Ключ подписи для `/api/link`. Пусто — создаётся сам в томе кэша |
+| `RETURN_KEY` | пусто | Ключ AES-256 для `mx_r` в hex (`openssl rand -hex 32`) или base64. Пусто — `mx_r` игнорируется |
 
 ### Обновление
 
@@ -407,3 +510,7 @@ node tests/e2e.cjs https://127.0.0.1:8443/<QRC_ID> https://127.0.0.1:8443/nspk/<
 - `public/assets/qrcode.js` — qrcode-generator 1.4.4, Kazuhiko Arase, MIT.
 - `public/assets/sbp-mark.svg`, `sbp-wordmark.svg` — знак и логотип СБП, товарные знаки НСПК.
 - `data/c2bmembers.json` — снимок списка банков НСПК на 25.11.2026.
+
+## Лицензия
+
+MIT, см. [LICENSE](LICENSE). Ошибки и предложения — через [issues](https://github.com/forestsnet/nspk-mirror/issues/new/choose), об уязвимостях пишите закрыто через [приватный отчёт](https://github.com/forestsnet/nspk-mirror/security/advisories/new).

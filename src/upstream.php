@@ -6,26 +6,31 @@ namespace NspkMirror;
 const CACHE_DIR = '/var/cache/nspk-mirror';
 
 /**
- * Запрос к апстриму. Сертификат сознательно не проверяем: цепочка Russian Trusted Root CA,
- * корень Минцифры в образ не кладём. status = 0 означает сетевую ошибку, текст в error.
+ * Запрос к апстриму. Сертификат НСПК сознательно не проверяем: цепочка Russian Trusted Root CA,
+ * корень Минцифры в образ не кладём. $verify включает проверку для чужих хостов вроде аватарок магазинов.
+ * status = 0 означает сетевую ошибку, текст в error.
  *
  * @param list<string> $headers
  * @return array{status: int, headers: list<array{0: string, 1: string}>, body: string, error: string}
  */
-function upstream_request(string $method, string $url, array $headers = [], ?string $body = null, int $timeout = 20): array
+function upstream_request(string $method, string $url, array $headers = [], ?string $body = null, int $timeout = 20, bool $verify = false): array
 {
     $responseHeaders = [];
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_HTTPHEADER => array_merge(['Expect:'], $headers),
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_FOLLOWLOCATION => false,
+        // Редиректы НСПК отдаём браузеру как есть, а чужие хосты вроде CDN аватарок проходим сами.
+        CURLOPT_FOLLOWLOCATION => $verify,
+        CURLOPT_MAXREDIRS => 3,
+        CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
         CURLOPT_ENCODING => '',
         CURLOPT_CONNECTTIMEOUT => 5,
         CURLOPT_TIMEOUT => $timeout,
         CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_2TLS,
-        CURLOPT_SSL_VERIFYPEER => false,
-        CURLOPT_SSL_VERIFYHOST => 0,
+        CURLOPT_SSL_VERIFYPEER => $verify,
+        CURLOPT_SSL_VERIFYHOST => $verify ? 2 : 0,
+        CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
         CURLOPT_HEADERFUNCTION => static function ($ch, string $line) use (&$responseHeaders): int {
             if (preg_match('#^HTTP/\S+\s+\d{3}#', $line)) {
                 $responseHeaders = []; // начался новый ответ (например, после 1xx), старые заголовки не нужны

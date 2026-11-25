@@ -30,7 +30,54 @@ const STATES = [
         'title' => 'Не удалось проверить ссылку',
         'text' => 'Сервис оплаты СБП сейчас не отвечает. Попробуйте ещё раз через минуту.',
     ],
+    'paid' => [
+        'http' => 200, 'tone' => 'ok', 'icon' => 'check',
+        'title' => 'Оплата завершена',
+        'text' => 'Банк закончил платёж по этому QR-коду. Статус заказа будет в магазине.',
+    ],
 ];
+
+/**
+ * Атрибуты body для скрипта страницы. Адреса возврата в HTML не попадают, только признаки, что они есть.
+ *
+ * @param array{qrcId?: string, sig?: string, verified?: bool, started?: bool, expiresIn?: int|null, ret?: array<string, string>|null} $ctx
+ */
+function body_attrs(bool $mobile, array $ctx, string $extraClass = ''): string
+{
+    $attrs = ['class' => trim(($mobile ? 'is-mobile' : 'is-desktop') . ' ' . $extraClass)];
+    if (isset($ctx['qrcId'])) {
+        $attrs['data-qrc'] = $ctx['qrcId'];
+    }
+    if (isset($ctx['sig'])) {
+        $attrs['data-sig'] = $ctx['sig'];
+    }
+    if (!empty($ctx['verified'])) {
+        $attrs['data-status'] = 'ok';
+    }
+    if (!empty($ctx['started'])) {
+        $attrs['data-started'] = '1';
+    }
+    if (isset($ctx['expiresIn'])) {
+        $attrs['data-exp-in'] = (string)(int)$ctx['expiresIn'];
+    }
+    $ret = $ctx['ret'] ?? null;
+    if (is_array($ret)) {
+        $attrs['data-ret'] = $ret['token'];
+        foreach (RETURN_FIELDS as $field) {
+            if (($ret[$field] ?? '') !== '') {
+                $attrs['data-ret-' . $field] = '1';
+            }
+        }
+    }
+    return implode(' ', array_map(static fn(string $k, string $v): string => $k . '="' . h($v) . '"', array_keys($attrs), $attrs));
+}
+
+/** Аватарка магазина через /a/: зеркало само скачивает и ужимает её под ×1, ×2, ×3. */
+function avatar_img(string $qrcId, array $ret): string
+{
+    $src = static fn(int $s): string => '/a/' . $qrcId . '?t=' . $ret['token'] . '&s=' . $s;
+    return '<img class="avatar" src="' . h($src(24)) . '" srcset="' . h($src(48)) . ' 2x, ' . h($src(72)) . ' 3x" width="24" height="24" alt="">';
+}
 
 function h(string $s): string
 {
@@ -93,6 +140,7 @@ function icon(string $name, string $class = 'i', float $stroke = 2): string
         'hourglass' => '<path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/>',
         'clock' => '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
         'cloud-off' => '<path d="m2 2 20 20"/><path d="M5.782 5.782A7 7 0 0 0 9 19h8.5a4.5 4.5 0 0 0 1.307-.193"/><path d="M21.532 16.5A4.5 4.5 0 0 0 17.5 10h-1.79A7.008 7.008 0 0 0 10 5.07"/>',
+        'check' => '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
     ];
     return '<svg class="' . h($class) . '" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="' . $stroke . '"'
         . ' stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' . $paths[$name] . '</svg>';
@@ -170,6 +218,7 @@ function state_section(array $state): string
     <button class="btn <?= $reload !== null ? 'btn-ghost' : 'btn-primary' ?>" type="button" data-action="back" hidden>Вернуться назад</button>
 <?php endif ?>
   </div>
+  <p class="state-countdown" hidden></p>
 <?php if (preg_match('/^RQ\d{5}$/', $code)): ?>
   <p class="state-code">Код НСПК <?= h($code) ?></p>
 <?php endif ?>
@@ -178,14 +227,13 @@ function state_section(array $state): string
     return (string)ob_get_clean();
 }
 
-/** @param array{kind: string, code?: string, message?: string} $state */
-function render_state(array $state, bool $mobile): string
+/**
+ * @param array{kind: string, code?: string, message?: string} $state
+ * @param array<string, mixed> $ctx то же, что для body_attrs: возврат в магазин, а для «Оплата уже идёт» ещё и слежение
+ */
+function render_state(array $state, bool $mobile, array $ctx = []): string
 {
-    return layout(
-        STATES[$state['kind']]['title'],
-        'class="' . ($mobile ? 'is-mobile' : 'is-desktop') . ' is-state"',
-        state_section($state),
-    );
+    return layout(STATES[$state['kind']]['title'], body_attrs($mobile, $ctx, 'is-state'), state_section($state));
 }
 
 /**
@@ -194,17 +242,21 @@ function render_state(array $state, bool $mobile): string
  *     banks: list<array{name: string, schema: string, logo: string, link: string}>,
  *     amount: array{0: string, 1: string}|null,
  *     nspkUrl: string, pageUrl: string, fallbackUrl: string, mobile: bool,
- *     merchant?: string|null, verified?: bool, sig?: string, expiresIn?: int|null
+ *     merchant?: string|null, verified?: bool, sig?: string, expiresIn?: int|null, ret?: array<string, string>|null
  * } $v
  */
 function render_page(array $v): string
 {
     $title = $v['amount'] !== null ? $v['amount'][0] . "\u{00A0}" . $v['amount'][1] . ' — оплата через СБП' : 'Оплата через СБП';
+    $ret = $v['ret'] ?? null;
+    $shop = is_array($ret) ? $ret['shop'] : '';
     $merchant = (string)($v['merchant'] ?? '');
-    $attrs = 'class="' . ($v['mobile'] ? 'is-mobile' : 'is-desktop') . '" data-qrc="' . h($v['qrcId']) . '"'
-        . (isset($v['sig']) ? ' data-sig="' . h($v['sig']) . '"' : '')
-        . (!empty($v['verified']) ? ' data-status="ok"' : '')
-        . (isset($v['expiresIn']) ? ' data-exp-in="' . (int)$v['expiresIn'] . '"' : '');
+    if ($merchant === '' && $shop !== '') {
+        $merchant = (string)parse_url($shop, PHP_URL_HOST);
+    }
+    $attrs = body_attrs($v['mobile'], $v);
+    $name = $shop !== '' ? '<a href="' . h($shop) . '" target="_blank" rel="noopener">' . h($merchant) . '</a>' : h($merchant);
+    $avatar = is_array($ret) && $ret['avatar'] !== '' ? avatar_img($v['qrcId'], $ret) : '';
 
     ob_start();
     ?>
@@ -214,7 +266,7 @@ function render_page(array $v): string
 <?php else: ?>
     <h1 class="title">Оплата через СБП</h1>
 <?php endif ?>
-    <p class="merchant"<?= $merchant === '' ? ' hidden' : '' ?>><span>Получатель</span> <b><?= h($merchant) ?></b></p>
+    <p class="merchant"<?= $merchant === '' ? ' hidden' : '' ?>><?= $avatar ?><span>Получатель</span> <b><?= $name ?></b></p>
     <div class="timer" hidden>
       <p><span>Оплатите в течение</span> <b class="timer-left"></b></p>
       <span class="timer-bar"><i></i></span>
@@ -303,7 +355,7 @@ function render_page(array $v): string
     </div>
   </div>
 </dialog>
-<?php foreach (['expired', 'started', 'invalid'] as $kind): ?>
+<?php foreach (['expired', 'started', 'invalid', 'paid'] as $kind): ?>
 <template id="state-<?= $kind ?>"><?= state_section(['kind' => $kind]) ?></template>
 <?php endforeach ?>
 <?php

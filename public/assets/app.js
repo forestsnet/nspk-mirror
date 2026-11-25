@@ -14,6 +14,9 @@
     if (img.complete && img.naturalWidth === 0) broken();
     else img.addEventListener('error', broken, { once: true });
   }
+  for (const img of document.querySelectorAll('img.avatar')) {
+    img.addEventListener('error', () => img.remove(), { once: true });
+  }
 
   const KEY = 'sbp:last-bank';
   const grid = document.querySelector('.grid');
@@ -108,7 +111,7 @@
     qr.addData(text);
     qr.make();
     const total = qr.getModuleCount() + 4; // по два модуля тихой зоны, остальное даёт белая рамка
-    const cssCell = Math.max(3, Math.floor(224 / total));
+    const cssCell = Math.max(3, Math.floor(200 / total));
     const scale = Math.max(1, Math.round(window.devicePixelRatio || 1));
     qrImg.src = paint(qr, cssCell * scale, 2);
     qrImg.width = cssCell * total;
@@ -172,36 +175,81 @@
 
   if (!isMobile) drawQr();
 
-  // Экраны вместо оплаты: «назад» в магазин, если есть куда, и повторная проверка.
+  const qrcId = body.dataset.qrc;
+  const sig = body.dataset.sig;
+  const ret = body.dataset.ret;
+  const targets = { ok: body.dataset.retOk === '1', fail: body.dataset.retFail === '1', shop: body.dataset.retShop === '1' };
+
+  // Возврат в магазин идёт через /r/: адреса из mx_r знает только сервер.
+  function leave(to) {
+    location.href = `/r/${encodeURIComponent(qrcId)}?t=${encodeURIComponent(ret)}&to=${to}`;
+  }
+
+  function countdown(root, to, seconds) {
+    const el = root.querySelector('.state-countdown');
+    let left = seconds;
+    const tick = () => {
+      if (left <= 0) {
+        leave(to);
+        return;
+      }
+      el.textContent = `Вернём в магазин через ${left} с`;
+      el.hidden = false;
+      left -= 1;
+      setTimeout(tick, 1000);
+    };
+    tick();
+  }
+
+  // Экран вместо оплаты: в магазин, если он дал адрес, иначе назад по истории.
   function wireState(root) {
+    const kind = root.dataset.kind;
+    const to = kind === 'paid' ? 'ok' : 'fail';
     const back = root.querySelector('[data-action="back"]');
     if (back) {
-      back.hidden = history.length < 2;
-      back.addEventListener('click', () => history.back());
+      if (qrcId && ret && (targets[to] || targets.shop)) {
+        back.textContent = 'Вернуться в магазин';
+        back.hidden = false;
+        back.addEventListener('click', () => leave(to));
+      } else {
+        back.hidden = history.length < 2;
+        back.addEventListener('click', () => history.back());
+      }
     }
     root.querySelector('[data-action="reload"]')?.addEventListener('click', () => location.reload());
+    // Сами уводим только туда, куда магазин попросил вернуть именно при этом исходе.
+    if (qrcId && ret && targets[to] && (kind === 'paid' || kind === 'expired')) countdown(root, to, kind === 'paid' ? 3 : 5);
   }
-  for (const section of document.querySelectorAll('main .state')) wireState(section);
+
+  const mainEl = document.querySelector('main');
+  const serverState = mainEl.querySelector('.state');
+  if (serverState) wireState(serverState);
+  const pageContent = serverState ? null : [...mainEl.childNodes];
 
   const known = { amount: '', merchant: '' };
   const summaryTitle = document.querySelector('.summary h1');
   if (summaryTitle && summaryTitle.classList.contains('amount')) known.amount = summaryTitle.firstChild.textContent;
   known.merchant = document.querySelector('.merchant b')?.textContent || '';
-  let finished = false;
+  const avatarImg = document.querySelector('.merchant .avatar');
+  let current = serverState ? serverState.dataset.kind : '';
+  let started = current === 'started' || body.dataset.started === '1';
+  let finished = Boolean(serverState) && !started;
   let timerHandle = 0;
 
   function showState(kind, code) {
     const tpl = document.getElementById(`state-${kind}`);
     if (!tpl) return false;
-    if (finished) return true;
-    finished = true;
-    clearInterval(timerHandle);
+    if (finished || current === kind) return true;
+    current = kind;
+    finished = kind !== 'started';
+    if (finished) clearInterval(timerHandle);
     const section = tpl.content.firstElementChild.cloneNode(true);
-    const meta = [known.amount && `${known.amount} ₽`, known.merchant].filter(Boolean).join(' · ');
-    if (meta) {
-      const el = section.querySelector('.state-meta');
-      el.textContent = meta;
-      el.hidden = false;
+    const meta = section.querySelector('.state-meta');
+    const text = [known.amount && `${known.amount} ₽`, known.merchant].filter(Boolean).join(' · ');
+    if (text) {
+      if (avatarImg) meta.append(avatarImg.cloneNode());
+      meta.append(text);
+      meta.hidden = false;
     }
     if (code && /^RQ\d{5}$/.test(code)) {
       const el = document.createElement('p');
@@ -210,13 +258,23 @@
       section.append(el);
     }
     if (sheet && sheet.open) sheet.close();
-    sheet?.remove();
-    document.querySelector('main').replaceChildren(section);
+    mainEl.replaceChildren(section);
     body.classList.add('is-state');
     document.title = section.querySelector('.state-title').textContent;
     wireState(section);
     window.scrollTo(0, 0);
     return true;
+  }
+
+  // Оплата не прошла, и QR снова ждёт: возвращаем страницу оплаты.
+  function showPayment() {
+    if (!pageContent) {
+      location.reload();
+      return;
+    }
+    current = '';
+    mainEl.replaceChildren(...pageContent);
+    body.classList.remove('is-state');
   }
 
   // Срок жизни QR приходит в mx_exp от проекта, сервер пересчитал его в секунды: часы телефона не мешают.
@@ -238,24 +296,50 @@
     timerHandle = setInterval(tick, 1000);
   }
 
-  // Пока страница открыта, ссылка перепроверяется у НСПК: раз в 30 секунд и при возвращении во вкладку.
-  const qrcId = body.dataset.qrc;
-  const sig = body.dataset.sig;
+  // Статус ссылки у НСПК: раз в 30 секунд, а после тапа по банку, показа QR или возврата во вкладку раз в 4 секунды.
+  let fastUntil = 0;
+  let pollTimer = 0;
+  function schedule() {
+    clearTimeout(pollTimer);
+    if (finished || !qrcId || !sig) return;
+    const fast = started || Date.now() < fastUntil;
+    pollTimer = setTimeout(() => {
+      if (document.visibilityState === 'visible') check();
+      else schedule();
+    }, fast ? 4000 : 30000);
+  }
+  function engage() {
+    fastUntil = Date.now() + 180000;
+    schedule();
+  }
   function check() {
     if (finished) return;
     fetch(`/api/link/${encodeURIComponent(qrcId)}?s=${encodeURIComponent(sig)}`, { headers: { Accept: 'application/json' } })
       .then((res) => (res.ok ? res.json() : null))
       .then((info) => { if (info) showLink(info); })
-      .catch(() => { /* без ответа страница работает как раньше */ });
+      .catch(() => { /* без ответа страница работает как раньше */ })
+      .finally(schedule);
   }
-  if (qrcId && sig && 'fetch' in window) {
-    if (body.dataset.status !== 'ok') check();
-    setInterval(() => { if (document.visibilityState === 'visible') check(); }, 30000);
-    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') check(); });
+  if (qrcId && sig && 'fetch' in window && !finished) {
+    if (body.dataset.status !== 'ok' && !started) check();
+    else schedule();
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') return;
+      engage();
+      check();
+    });
+    grid?.addEventListener('click', (event) => { if (event.target.closest('.bank')) engage(); });
+    for (const el of document.querySelectorAll('[data-toggle="show-qr"], [data-action="save-qr"], .seg')) {
+      el.addEventListener('click', engage);
+    }
   }
 
   function showLink(info) {
     if (info.status === 'ok') {
+      if (started) {
+        started = false;
+        showPayment();
+      }
       const summary = document.querySelector('.summary');
       if (!summary) return;
       if (info.amountLabel && info.amountLabel !== known.amount) {
@@ -271,7 +355,7 @@
       }
       if (info.merchant && info.merchant !== known.merchant) {
         const merchant = summary.querySelector('.merchant');
-        merchant.querySelector('b').textContent = info.merchant;
+        (merchant.querySelector('b a') || merchant.querySelector('b')).textContent = info.merchant;
         merchant.hidden = false;
         merchant.classList.add('is-new');
         known.merchant = info.merchant;
@@ -279,7 +363,17 @@
       return;
     }
     if (info.status !== 'rejected') return;
-    if (['expired', 'started', 'invalid'].includes(info.state) && showState(info.state, info.code)) return;
+    if (info.state === 'started') {
+      started = true;
+      showState('started', info.code);
+      return;
+    }
+    // НСПК не говорит «оплачено» прямо. Лучший признак: оплата началась, а потом QR перестал ждать.
+    if (started && (info.state === 'expired' || info.state === 'error')) {
+      showState('paid');
+      return;
+    }
+    if ((info.state === 'expired' || info.state === 'invalid') && showState(info.state, info.code)) return;
     const alert = document.querySelector('.alert');
     if (alert && info.message) {
       alert.querySelector('.alert-text').textContent = info.message;

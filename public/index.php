@@ -9,6 +9,7 @@ require __DIR__ . '/../src/banks.php';
 require __DIR__ . '/../src/logo.php';
 require __DIR__ . '/../src/pow.php';
 require __DIR__ . '/../src/link.php';
+require __DIR__ . '/../src/ret.php';
 require __DIR__ . '/../src/page.php';
 
 const MAX_REQUEST_BODY = 65536;
@@ -172,15 +173,56 @@ if (preg_match('#^/api/link/([A-Za-z0-9]{32})$#', $path, $m) && $method === 'GET
     send_json(200, public_link_info($info, link_state($info, allowed_merchants(), false)));
 }
 
+// Возврат в магазин: адреса лежат только в зашифрованном mx_r, страница знает лишь, что они есть.
+if (preg_match('#^/r/([A-Za-z0-9]{32})$#', $path, $m) && $readOnly) {
+    parse_str(ltrim($query, '?'), $q);
+    $key = return_key();
+    $data = $key !== null ? open_return_token(is_string($q['t'] ?? null) ? $q['t'] : '', $m[1], $key) : null;
+    $to = in_array($q['to'] ?? '', ['ok', 'fail', 'shop'], true) ? $q['to'] : 'fail';
+    $url = $data === null ? '' : ($data[$to] !== '' ? $data[$to] : $data['shop']);
+    if ($url === '') {
+        send_html(404, render_state(['kind' => 'invalid'], $mobile), $method === 'HEAD');
+    }
+    header('Cache-Control: no-store');
+    header('Referrer-Policy: no-referrer');
+    header('Location: ' . $url, true, 303);
+    exit;
+}
+
+if (preg_match('#^/a/([A-Za-z0-9]{32})$#', $path, $m) && $readOnly) {
+    parse_str(ltrim($query, '?'), $q);
+    $key = return_key();
+    $data = $key !== null ? open_return_token(is_string($q['t'] ?? null) ? $q['t'] : '', $m[1], $key) : null;
+    $res = ($data['avatar'] ?? '') !== '' ? avatar($data['avatar'], (int)($q['s'] ?? 24)) : ['status' => 404, 'body' => ''];
+    if ($res['status'] !== 200) {
+        plain(404, "Not Found\n");
+    }
+    header('Content-Type: image/png');
+    header('Cache-Control: public, max-age=86400');
+    header('X-Content-Type-Options: nosniff');
+    header('Content-Length: ' . strlen($res['body']));
+    if ($method === 'GET') {
+        echo $res['body'];
+    }
+    exit;
+}
+
 $qrcId = qrc_id($path);
 if ($qrcId !== null && $readOnly) {
+    $ret = return_info($query, $qrcId);
     $expiresIn = expires_in($query, time());
     if ($expiresIn !== null && $expiresIn <= 0) {
-        send_html(410, render_state(['kind' => 'expired'], $mobile), $method === 'HEAD');
+        send_html(410, render_state(['kind' => 'expired'], $mobile, ['qrcId' => $qrcId, 'ret' => $ret]), $method === 'HEAD');
     }
     [$info, $state] = check_link($qrcId, $ua);
     if ($state !== null) {
-        send_html(STATES[$state['kind']]['http'], render_state($state, $mobile), $method === 'HEAD');
+        // «Ссылка недействительна» без возврата: это и чужой мерчант. «Оплата уже идёт» продолжает следить за статусом.
+        $ctx = match ($state['kind']) {
+            'invalid' => [],
+            'started' => ['qrcId' => $qrcId, 'ret' => $ret, 'sig' => link_sig($qrcId), 'started' => true],
+            default => ['qrcId' => $qrcId, 'ret' => $ret],
+        };
+        send_html(STATES[$state['kind']]['http'], render_state($state, $mobile, $ctx), $method === 'HEAD');
     }
 
     $clean = clean_query($query);
@@ -201,6 +243,7 @@ if ($qrcId !== null && $readOnly) {
         'verified' => $info['status'] === 'ok',
         'sig' => link_sig($qrcId),
         'expiresIn' => $expiresIn,
+        'ret' => $ret,
         'nspkUrl' => 'https://' . QR_HOST . '/' . $qrcId . $clean,
         'pageUrl' => $origin . '/' . $qrcId . clean_query($query, true),
         'fallbackUrl' => '/nspk/' . $qrcId . $clean,
