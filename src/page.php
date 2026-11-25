@@ -37,6 +37,7 @@ function icon(string $name): string
         'chevron' => '<path d="m6 9 6 6 6-6"/>',
         'arrow' => '<path d="M7 7h10v10"/><path d="M7 17 17 7"/>',
         'x' => '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+        'alert' => '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
     ];
     return '<svg class="i" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"'
         . ' stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' . $paths[$name] . '</svg>';
@@ -44,6 +45,7 @@ function icon(string $name): string
 
 /**
  * @param array{
+ *     qrcId: string,
  *     banks: list<array{name: string, schema: string, logo: string, link: string}>,
  *     amount: array{0: string, 1: string}|null,
  *     nspkUrl: string, pageUrl: string, fallbackUrl: string, mobile: bool
@@ -68,7 +70,7 @@ function render_page(array $v): string
 <link rel="preload" href="/assets/fonts/onest-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="<?= h(asset('app.css')) ?>">
 </head>
-<body class="<?= $v['mobile'] ? 'is-mobile' : 'is-desktop' ?>">
+<body class="<?= $v['mobile'] ? 'is-mobile' : 'is-desktop' ?>" data-qrc="<?= h($v['qrcId']) ?>">
 <header class="head">
   <span class="chip"><img src="/assets/sbp-mark.svg" width="14" height="17" alt="">Система быстрых платежей</span>
 <?php if ($v['amount'] !== null): ?>
@@ -76,11 +78,20 @@ function render_page(array $v): string
 <?php else: ?>
   <h1 class="title">Оплата через СБП</h1>
 <?php endif ?>
+  <p class="merchant" hidden><span>Получатель</span> <b></b></p>
   <p class="lead only-mobile">Выберите банк, и его приложение откроется с уже заполненным платежом</p>
   <p class="lead only-desktop">Отсканируйте QR-код в приложении банка на телефоне</p>
 </header>
 
 <main class="shell">
+  <div class="alert" role="alert" hidden>
+    <?= icon('alert') ?>
+    <div>
+      <p class="alert-text"></p>
+      <p class="alert-hint" hidden>Вернитесь в магазин и создайте платёж заново.</p>
+    </div>
+  </div>
+
   <section class="panel banks" id="banks" aria-labelledby="banks-title">
     <h2 class="panel-title" id="banks-title">Выберите банк</h2>
     <label class="search">
@@ -148,12 +159,14 @@ function render_page(array $v): string
 </footer>
 
 <dialog class="sheet" id="web-banks" aria-labelledby="sheet-title">
-  <div class="sheet-head">
-    <div>
-      <h2 class="sheet-title" id="sheet-title">Интернет-банк в браузере</h2>
-      <p class="sheet-sub">Откроется сайт банка с этим платежом, останется войти и подтвердить</p>
+  <div class="sheet-top">
+    <div class="sheet-head">
+      <div>
+        <h2 class="sheet-title" id="sheet-title">Интернет-банк в браузере</h2>
+        <p class="sheet-sub">Откроется сайт банка с этим платежом, останется войти и подтвердить</p>
+      </div>
+      <button class="sheet-close" type="button" data-close aria-label="Закрыть"><?= icon('x') ?></button>
     </div>
-    <button class="sheet-close" type="button" data-close aria-label="Закрыть"><?= icon('x') ?></button>
   </div>
 </dialog>
 <script src="<?= h(asset('qrcode.js')) ?>" defer></script>

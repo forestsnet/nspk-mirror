@@ -131,12 +131,16 @@
   const banksPanel = document.getElementById('banks');
   const useSheet = !isMobile && Boolean(sheet && banksPanel && typeof sheet.showModal === 'function');
   if (useSheet) {
+    const search = banksPanel.querySelector('.search');
+    if (search) sheet.querySelector('.sheet-top').append(search);
     sheet.append(banksPanel);
     sheet.addEventListener('click', (event) => {
       const r = sheet.getBoundingClientRect();
-      const outside = event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom;
+      const outside = event.target === sheet
+        && (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom);
       if (outside || event.target.closest('[data-close]')) sheet.close();
     });
+    sheet.addEventListener('close', () => document.documentElement.classList.remove('is-locked'));
   }
 
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -149,7 +153,9 @@
     btn.addEventListener('click', () => {
       if (useSheet && btn.dataset.toggle === 'show-banks') {
         filter();
+        document.documentElement.classList.add('is-locked');
         sheet.showModal();
+        sheet.scrollTop = 0;
         input?.focus();
         return;
       }
@@ -165,4 +171,44 @@
   }
 
   if (!isMobile) drawQr();
+
+  const qrcId = body.dataset.qrc;
+  if (qrcId && 'fetch' in window) {
+    fetch(`/api/link/${encodeURIComponent(qrcId)}`, { headers: { Accept: 'application/json' } })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((info) => { if (info) showLink(info); })
+      .catch(() => { /* без суммы страница работает как раньше */ });
+  }
+
+  function showLink(info) {
+    const head = document.querySelector('.head');
+    if (info.status === 'ok') {
+      const h1 = head.querySelector('h1');
+      const same = h1.classList.contains('amount') && h1.firstChild && h1.firstChild.textContent === info.amountLabel;
+      if (info.amountLabel && !same) {
+        const amount = document.createElement('h1');
+        const cur = document.createElement('span');
+        amount.className = 'amount is-new';
+        cur.className = 'cur';
+        cur.textContent = '₽';
+        amount.append(info.amountLabel, cur);
+        h1.replaceWith(amount);
+        document.title = `${info.amountLabel} ₽ — оплата через СБП`;
+      }
+      if (info.merchant) {
+        const merchant = head.querySelector('.merchant');
+        merchant.querySelector('b').textContent = info.merchant;
+        merchant.hidden = false;
+        merchant.classList.add('is-new');
+      }
+      return;
+    }
+    if (info.status === 'rejected' && info.message) {
+      const alert = document.querySelector('.alert');
+      alert.querySelector('.alert-text').textContent = info.message;
+      alert.querySelector('.alert-hint').hidden = !info.expired;
+      alert.hidden = false;
+      body.classList.toggle('is-expired', Boolean(info.expired));
+    }
+  }
 })();

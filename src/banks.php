@@ -153,7 +153,12 @@ function amount_parts(string $query): ?array
     if (!is_string($sum) || !preg_match('/^\d{1,12}$/', $sum) || $cur !== 'RUB' || (int)$sum === 0) {
         return null;
     }
-    $kop = (int)$sum;
+    return [format_amount((int)$sum), '₽'];
+}
+
+/** Копейки → «1 500» или «156,30», без знака валюты. */
+function format_amount(int $kop): string
+{
     $rub = number_format(intdiv($kop, 100), 0, ',', "\u{202F}");
-    return [$kop % 100 ? $rub . ',' . sprintf('%02d', $kop % 100) : $rub, '₽'];
+    return $kop % 100 ? $rub . ',' . sprintf('%02d', $kop % 100) : $rub;
 }

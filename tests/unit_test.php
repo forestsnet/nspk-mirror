@@ -6,6 +6,8 @@ require __DIR__ . '/../src/rewrite.php';
 require __DIR__ . '/../src/upstream.php';
 require __DIR__ . '/../src/banks.php';
 require __DIR__ . '/../src/logo.php';
+require __DIR__ . '/../src/pow.php';
+require __DIR__ . '/../src/link.php';
 require __DIR__ . '/../src/page.php';
 
 use function NspkMirror\amount_parts;
@@ -18,6 +20,13 @@ use function NspkMirror\qrc_id;
 use function NspkMirror\render_page;
 use function NspkMirror\resize_png;
 use function NspkMirror\detect_origin;
+use function NspkMirror\format_amount;
+use function NspkMirror\parse_api_config;
+use function NspkMirror\parse_link_response;
+use function NspkMirror\pow_hash;
+use function NspkMirror\pow_headers;
+use function NspkMirror\siphash24;
+use const NspkMirror\POW_DEFAULTS;
 use function NspkMirror\map_location;
 use function NspkMirror\rewrite_body;
 use function NspkMirror\rewrite_json;
@@ -176,6 +185,7 @@ check('initial plain', initial('АЛЬФА-БАНК'), 'А');
 
 // Страница: ссылки и экранирование.
 $html = render_page([
+    'qrcId' => $id,
     'banks' => [
         $banks[0] + ['link' => bank_link($banks[0], $id, '?type=02&sum=15630')],
         ['name' => '<b>Банк</b>', 'schema' => 'bank100000000002', 'logo' => '', 'link' => "bank100000000002://qr.nspk.ru/$id"],
@@ -202,6 +212,59 @@ if (function_exists('imagecreatetruecolor')) {
 } else {
     echo "skip logo resize: no GD\n";
 }
+
+// SipHash-2-4: эталонные векторы и строка в формате PoW, сверенная с JS страницы НСПК.
+$hex = static fn(array $v): string => sprintf('%08x%08x', $v[0], $v[1]);
+$refKey = (string)hex2bin('000102030405060708090a0b0c0d0e0f');
+$powKey = (string)hex2bin(POW_DEFAULTS['key']);
+check('siphash empty', $hex(siphash24('', $refKey)), '726fdb47dd0e0e31');
+check('siphash 15 bytes', $hex(siphash24(implode(array_map('chr', range(0, 14))), $refKey)), 'a129ca6149be45e5');
+check('siphash like NSPK js', $hex(siphash24('1;3f2a9c1e-7b5d-4e8a-9c0f-1a2b3c4d5e6f;1764025200000;0', $powKey)), '31abc03b8a3b6716');
+
+// PoW: каждый хеш ниже сложности и посчитан от предыдущего, отметок времени на одну больше.
+$guid = '3f2a9c1e-7b5d-4e8a-9c0f-1a2b3c4d5e6f';
+$pow = [];
+foreach (pow_headers(POW_DEFAULTS, $guid) as $line) {
+    [$name, $value] = explode(': ', $line, 2);
+    $pow[$name] = $value;
+}
+$stamps = explode(';', $pow['X-Token-Timestamp']);
+$hashes = explode(';', $pow['X-Token-Pow']);
+$nonces = explode(';', $pow['X-Token-Nonce']);
+$chainOk = $hashes !== [''] && count($stamps) === count($hashes) + 1 && count($nonces) === count($hashes);
+$prev = '0';
+foreach ($hashes as $i => $value) {
+    $chainOk = $chainOk && (string)pow_hash("{$nonces[$i]};$guid;{$stamps[$i]};$prev", $powKey) === $value && (int)$value < 2 ** 56;
+    $prev = $value;
+}
+check('pow chain valid', $chainOk, true);
+check('pow version and guid', [$pow['X-Token-Version'], $pow['X-Token-Guid']], ['prod_bypass_1', $guid]);
+
+// apiConfig.json: адрес только на cbrpay.ru, параметры PoW в рамках.
+$cfg = parse_api_config((string)json_encode([
+    'baseURL' => 'https://upc.cbrpay.ru/v1/payment-link',
+    'params' => ['difficulty' => 72057594037927940, 'key' => '11032FD175F1998436DE0C6F969325A6', 'maxPowCount' => 15, 'maxTimeThresholdMs' => 500, 'paramsVersion' => 'prod_bypass_1'],
+    'errorMessages' => [['listOfCodes' => ['RQ05014'], 'message' => 'Код недействителен']],
+], JSON_UNESCAPED_UNICODE));
+check('config base', $cfg['baseURL'], 'https://upc.cbrpay.ru/v1/payment-link');
+check('config error text', $cfg['errors']['RQ05014'], 'Код недействителен');
+$bad = parse_api_config((string)json_encode([
+    'baseURL' => 'http://169.254.169.254/latest',
+    'params' => ['difficulty' => 1, 'key' => 'zz', 'maxPowCount' => 100000, 'maxTimeThresholdMs' => 999999, 'paramsVersion' => 'x'],
+]));
+check('config foreign base dropped', $bad['baseURL'], 'https://upc.cbrpay.ru/v1/payment-link');
+check('config bad pow params → defaults', $bad['params'], POW_DEFAULTS);
+check('config empty → defaults', parse_api_config('')['params'], POW_DEFAULTS);
+
+// Ответы payment-link.
+$errors = parse_api_config('')['errors'];
+check('link ok', parse_link_response(200, '{"code":"RQ00000","message":"ok","data":{"brandName":"FORESTSNET.CLOUD","amount":"15630"}}', $errors),
+    ['status' => 'ok', 'amount' => '15630', 'amountLabel' => '156,30', 'merchant' => 'FORESTSNET.CLOUD']);
+check('link ok without amount', parse_link_response(200, '{"code":"RQ00000","data":{"brandName":"Магазин"}}', $errors), ['status' => 'ok', 'merchant' => 'Магазин']);
+check('link expired', parse_link_response(400, '{"code":"RQ05014","message":"Значение uniQrId не найдено","data":null}', $errors)['expired'] ?? null, true);
+check('link payment started', [parse_link_response(400, '{"code":"RQ05301"}', $errors)['status'] ?? null, parse_link_response(400, '{"code":"RQ05301"}', $errors)['expired'] ?? null], ['rejected', false]);
+check('link pow rejected', parse_link_response(403, '', $errors), ['status' => 'error']);
+check('format amount', [format_amount(15630), format_amount(150000), format_amount(5)], ['156,30', "1\u{202F}500", '0,05']);
 
 echo $fails ? "\n$fails failed\n" : "\nall passed\n";
 exit($fails ? 1 : 0);

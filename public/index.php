@@ -7,6 +7,8 @@ require __DIR__ . '/../src/rewrite.php';
 require __DIR__ . '/../src/upstream.php';
 require __DIR__ . '/../src/banks.php';
 require __DIR__ . '/../src/logo.php';
+require __DIR__ . '/../src/pow.php';
+require __DIR__ . '/../src/link.php';
 require __DIR__ . '/../src/page.php';
 
 const MAX_REQUEST_BODY = 65536;
@@ -32,7 +34,7 @@ const DROP_RESPONSE = [
 ];
 
 const PAGE_CSP = "default-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'; font-src 'self'; "
-    . "base-uri 'none'; form-action 'none'";
+    . "connect-src 'self'; base-uri 'none'; form-action 'none'";
 
 function plain(int $status, string $text): never
 {
@@ -98,6 +100,16 @@ if ($path === '/' || $path === '/serviceWorker.js') {
     plain(404, "Not Found\n");
 }
 
+if (preg_match('#^/api/link/([A-Za-z0-9]{32})$#', $path, $m) && $method === 'GET') {
+    $json = (string)json_encode(link_info($m[1], (string)($_SERVER['HTTP_USER_AGENT'] ?? '')), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store');
+    header('X-Content-Type-Options: nosniff');
+    header('Content-Length: ' . strlen($json));
+    echo $json;
+    exit;
+}
+
 $qrcId = qrc_id($path);
 if ($qrcId !== null && $readOnly) {
     $clean = clean_query($query);
@@ -111,6 +123,7 @@ if ($qrcId !== null && $readOnly) {
         exit;
     }
     $html = render_page([
+        'qrcId' => $qrcId,
         'banks' => $banks,
         'amount' => amount_parts($clean),
         'nspkUrl' => 'https://' . QR_HOST . '/' . $qrcId . $clean,
