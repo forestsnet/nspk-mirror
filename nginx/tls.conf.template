@@ -1,6 +1,8 @@
 # HTTPS с сертификатом Let's Encrypt из /etc/letsencrypt/live/${MIRROR_DOMAIN}/.
 # ${MIRROR_DOMAIN} подставляет envsubst официального образа nginx при старте.
 
+server_tokens off;
+
 map $scheme $mirror_proto {
     default $scheme;
 }

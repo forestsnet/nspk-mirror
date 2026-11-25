@@ -1,6 +1,8 @@
 # Только HTTP. TLS снимает Cloudflare, балансировщик или nginx хоста.
 # ${MIRROR_DOMAIN} подставляет envsubst официального образа nginx при старте.
 
+server_tokens off;
+
 map $http_x_forwarded_proto $mirror_proto {
     default $http_x_forwarded_proto;
     ""      $scheme;

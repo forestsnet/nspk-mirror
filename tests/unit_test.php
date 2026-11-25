@@ -2,6 +2,8 @@
 // Запуск: docker compose exec mirror php /var/www/tests/unit_test.php
 declare(strict_types=1);
 
+putenv('MIRROR_SECRET=test-secret-0123456789abcdef');
+
 require __DIR__ . '/../src/rewrite.php';
 require __DIR__ . '/../src/upstream.php';
 require __DIR__ . '/../src/banks.php';
@@ -20,7 +22,13 @@ use function NspkMirror\qrc_id;
 use function NspkMirror\render_page;
 use function NspkMirror\resize_png;
 use function NspkMirror\detect_origin;
+use function NspkMirror\expires_in;
 use function NspkMirror\format_amount;
+use function NspkMirror\link_sig;
+use function NspkMirror\link_state;
+use function NspkMirror\merchant_allowed;
+use function NspkMirror\public_link_info;
+use function NspkMirror\render_state;
 use function NspkMirror\parse_api_config;
 use function NspkMirror\parse_link_response;
 use function NspkMirror\pow_hash;
@@ -265,6 +273,42 @@ check('link expired', parse_link_response(400, '{"code":"RQ05014","message":"З�
 check('link payment started', [parse_link_response(400, '{"code":"RQ05301"}', $errors)['status'] ?? null, parse_link_response(400, '{"code":"RQ05301"}', $errors)['expired'] ?? null], ['rejected', false]);
 check('link pow rejected', parse_link_response(403, '', $errors), ['status' => 'error']);
 check('format amount', [format_amount(15630), format_amount(150000), format_amount(5)], ['156,30', "1\u{202F}500", '0,05']);
+check('link ok with ids', parse_link_response(200, '{"code":"RQ00000","data":{"amount":"100","merchantId":"MA0007117316","legalId":"LB0003004344"}}', $errors),
+    ['status' => 'ok', 'amount' => '100', 'amountLabel' => '1', 'merchantId' => 'MA0007117316', 'legalId' => 'LB0003004344']);
+
+// Параметры зеркала mx_* не уходят в банк, но остаются в адресе самой страницы.
+check('query drops mx_', clean_query('?type=02&mx_exp=1764030000&sum=100'), '?type=02&sum=100');
+check('query keeps mx_ for page', clean_query('?wg_theme=dark&mx_exp=1764030000', true), '?mx_exp=1764030000');
+check('expires in', expires_in('?mx_exp=1764030300', 1764030000), 300);
+check('expires past', expires_in('?mx_exp=1764029900', 1764030000), -100);
+check('expires garbage', expires_in('?mx_exp=soon', 1764030000), null);
+check('expires too far', expires_in('?mx_exp=1999999999', 1764030000), null);
+check('expires missing', expires_in('?type=02', 1764030000), null);
+
+// Антифрод: список мерчантов и экран вместо оплаты.
+$okInfo = ['status' => 'ok', 'merchant' => 'FORESTSNET.CLOUD', 'merchantId' => 'MA0007117316', 'legalId' => 'LB0003004344'];
+check('merchant by id', merchant_allowed($okInfo, ['MA0007117316']), true);
+check('merchant by legal id', merchant_allowed($okInfo, ['LB0003004344']), true);
+check('merchant foreign', merchant_allowed($okInfo, ['MA0000000001']), false);
+check('merchant no list', merchant_allowed($okInfo, []), true);
+check('state ok', link_state($okInfo, ['MA0007117316'], false), null);
+check('state foreign merchant → invalid', link_state($okInfo, ['MA0000000001'], false), ['kind' => 'invalid']);
+check('state expired', link_state(['status' => 'rejected', 'code' => 'RQ05014', 'message' => 'm', 'expired' => true], [], false)['kind'] ?? null, 'expired');
+check('state started', link_state(['status' => 'rejected', 'code' => 'RQ05301', 'message' => 'm', 'expired' => false], [], false)['kind'] ?? null, 'started');
+check('state declined', link_state(['status' => 'rejected', 'code' => 'RQ05058', 'message' => 'm', 'expired' => false], [], false)['kind'] ?? null, 'error');
+check('state nspk down, open', link_state(['status' => 'error'], ['MA0007117316'], false), null);
+check('state nspk down, strict', link_state(['status' => 'error'], ['MA0007117316'], true), ['kind' => 'unavailable']);
+check('public info hides ids', public_link_info($okInfo, null), ['status' => 'ok', 'merchant' => 'FORESTSNET.CLOUD']);
+check('public info rejected', public_link_info($okInfo, ['kind' => 'expired', 'code' => 'RQ05014', 'message' => 'm']),
+    ['status' => 'rejected', 'state' => 'expired', 'code' => 'RQ05014', 'message' => 'm']);
+check('link sig', link_sig('BD1'), substr(hash_hmac('sha256', 'BD1', 'test-secret-0123456789abcdef'), 0, 24));
+
+$stateHtml = render_state(['kind' => 'expired', 'code' => 'RQ05014'], true);
+check('state page title', str_contains($stateHtml, 'Время на оплату вышло'), true);
+check('state page code', str_contains($stateHtml, 'Код НСПК RQ05014'), true);
+check('state page marked', str_contains($stateHtml, 'class="is-mobile is-state"'), true);
+check('state page without banks and qr', str_contains($stateHtml, 'bank1000') || str_contains($stateHtml, 'id="qr"'), false);
+check('page has state templates', str_contains($html, '<template id="state-expired">') && str_contains($html, '<template id="state-invalid">'), true);
 
 echo $fails ? "\n$fails failed\n" : "\nall passed\n";
 exit($fails ? 1 : 0);

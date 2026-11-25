@@ -3,16 +3,67 @@ declare(strict_types=1);
 
 namespace NspkMirror;
 
+/** Экраны вместо оплаты. */
+const STATES = [
+    'invalid' => [
+        'http' => 404, 'tone' => 'danger', 'icon' => 'unlink',
+        'title' => 'Ссылка недействительна',
+        'text' => 'Такой ссылки на оплату нет. Проверьте её или вернитесь в магазин и создайте платёж заново.',
+    ],
+    'expired' => [
+        'http' => 410, 'tone' => 'danger', 'icon' => 'hourglass',
+        'title' => 'Время на оплату вышло',
+        'text' => 'Ссылка на оплату больше не действует. Если вы уже оплатили, проверьте статус заказа в магазине. Если нет, создайте платёж заново.',
+    ],
+    'started' => [
+        'http' => 200, 'tone' => 'accent', 'icon' => 'clock',
+        'title' => 'Оплата уже идёт',
+        'text' => 'По этому QR-коду уже началась оплата. Дождитесь её завершения в приложении банка.',
+    ],
+    'error' => [
+        'http' => 200, 'tone' => 'danger', 'icon' => 'alert',
+        'title' => 'Оплатить не получится',
+        'text' => 'Банк отклонил операцию. Выберите другой способ оплаты или создайте платёж заново.',
+    ],
+    'unavailable' => [
+        'http' => 503, 'tone' => 'muted', 'icon' => 'cloud-off',
+        'title' => 'Не удалось проверить ссылку',
+        'text' => 'Сервис оплаты СБП сейчас не отвечает. Попробуйте ещё раз через минуту.',
+    ],
+];
+
 function h(string $s): string
 {
     return htmlspecialchars($s, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8');
 }
 
-/** Адрес файла из assets с версией по времени изменения, чтобы браузер не держал старые CSS и JS. */
+/**
+ * Собранные JS и CSS лежат под именами-хешами, карту пишет сборка образа.
+ *
+ * @return array<string, string>
+ */
+function asset_manifest(): array
+{
+    static $manifest = null;
+    $manifest ??= json_decode((string)@file_get_contents(__DIR__ . '/../data/assets.json'), true) ?: [];
+    return $manifest;
+}
+
+/** Адрес файла из assets: собранный, если есть сборка, иначе исходник с версией по времени изменения. */
 function asset(string $file): string
 {
+    $built = asset_manifest()[$file] ?? null;
+    if (is_string($built)) {
+        return '/assets/b/' . $built;
+    }
     $mtime = @filemtime(rtrim((string)($_SERVER['DOCUMENT_ROOT'] ?? ''), '/') . '/assets/' . $file);
     return '/assets/' . $file . ($mtime ? '?v=' . base_convert((string)$mtime, 10, 36) : '');
+}
+
+function script_tags(): string
+{
+    $files = isset(asset_manifest()['app.js']) ? ['app.js'] : ['qrcode.js', 'app.js'];
+    return implode("\n", array_map(static fn(string $f): string => '<script src="' . h(asset($f)) . '" defer></script>', $files));
 }
 
 function is_mobile_ua(string $ua): bool
@@ -27,7 +78,7 @@ function initial(string $name): string
     return mb_strtoupper(mb_substr($name, 0, 1));
 }
 
-function icon(string $name): string
+function icon(string $name, string $class = 'i', float $stroke = 2): string
 {
     $paths = [
         'search' => '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
@@ -38,22 +89,18 @@ function icon(string $name): string
         'arrow' => '<path d="M7 7h10v10"/><path d="M7 17 17 7"/>',
         'x' => '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
         'alert' => '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+        'unlink' => '<path d="M9 17H7A5 5 0 0 1 7 7"/><path d="M15 7h2a5 5 0 0 1 4 8"/><path d="M8 12h4"/><path d="m2 2 20 20"/>',
+        'hourglass' => '<path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/>',
+        'clock' => '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+        'cloud-off' => '<path d="m2 2 20 20"/><path d="M5.782 5.782A7 7 0 0 0 9 19h8.5a4.5 4.5 0 0 0 1.307-.193"/><path d="M21.532 16.5A4.5 4.5 0 0 0 17.5 10h-1.79A7.008 7.008 0 0 0 10 5.07"/>',
     ];
-    return '<svg class="i" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"'
+    return '<svg class="' . h($class) . '" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="' . $stroke . '"'
         . ' stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' . $paths[$name] . '</svg>';
 }
 
-/**
- * @param array{
- *     qrcId: string,
- *     banks: list<array{name: string, schema: string, logo: string, link: string}>,
- *     amount: array{0: string, 1: string}|null,
- *     nspkUrl: string, pageUrl: string, fallbackUrl: string, mobile: bool
- * } $v
- */
-function render_page(array $v): string
+/** Общий каркас: плашка СБП сверху, содержимое по центру, подвал снизу. */
+function layout(string $title, string $bodyAttrs, string $main, string $after = ''): string
 {
-    $title = $v['amount'] !== null ? $v['amount'][0] . "\u{00A0}" . $v['amount'][1] . ' — оплата через СБП' : 'Оплата через СБП';
     ob_start();
     ?>
 <!doctype html>
@@ -70,26 +117,115 @@ function render_page(array $v): string
 <link rel="preload" href="/assets/fonts/onest-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="<?= h(asset('app.css')) ?>">
 </head>
-<body class="<?= $v['mobile'] ? 'is-mobile' : 'is-desktop' ?>" data-qrc="<?= h($v['qrcId']) ?>">
+<body <?= $bodyAttrs ?>>
 <header class="head">
   <span class="chip"><img src="/assets/sbp-mark.svg" width="14" height="17" alt="">Система быстрых платежей</span>
-<?php if ($v['amount'] !== null): ?>
-  <h1 class="amount"><?= h($v['amount'][0]) ?><span class="cur"><?= h($v['amount'][1]) ?></span></h1>
-<?php else: ?>
-  <h1 class="title">Оплата через СБП</h1>
-<?php endif ?>
-  <p class="merchant" hidden><span>Получатель</span> <b></b></p>
-  <p class="lead only-mobile">Выберите банк, и его приложение откроется с уже заполненным платежом</p>
-  <p class="lead only-desktop">Отсканируйте QR-код в приложении банка на телефоне</p>
 </header>
 
 <main class="shell">
+<?= $main ?>
+</main>
+
+<footer class="foot">
+  <img src="/assets/sbp-wordmark.svg" width="62" height="24" alt="СБП, Система быстрых платежей">
+  <p>Деньги списываются в приложении вашего банка</p>
+</footer>
+<?= $after ?>
+<?= script_tags() ?>
+
+</body>
+</html>
+<?php
+    return (string)ob_get_clean();
+}
+
+/**
+ * Экран вместо оплаты.
+ *
+ * @param array{kind: string, code?: string, message?: string} $state
+ */
+function state_section(array $state): string
+{
+    $kind = $state['kind'];
+    $s = STATES[$kind];
+    $message = trim($state['message'] ?? '');
+    $text = $kind === 'error' && $message !== '' ? $message : $s['text'];
+    $code = (string)($state['code'] ?? '');
+    $reload = ['started' => 'Проверить статус', 'unavailable' => 'Попробовать снова'][$kind] ?? null;
+    ob_start();
+    ?>
+<section class="state" data-kind="<?= h($kind) ?>" data-tone="<?= h($s['tone']) ?>">
+  <div class="state-art" aria-hidden="true">
+    <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+    <?= icon($s['icon'], 'state-icon', 1.6) ?>
+  </div>
+  <h1 class="state-title"><?= h($s['title']) ?></h1>
+  <p class="state-text"><?= h($text) ?></p>
+  <p class="state-meta" hidden></p>
+  <div class="state-actions">
+<?php if ($reload !== null): ?>
+    <button class="btn btn-primary" type="button" data-action="reload"><?= h($reload) ?></button>
+<?php endif ?>
+<?php if ($kind !== 'unavailable'): ?>
+    <button class="btn <?= $reload !== null ? 'btn-ghost' : 'btn-primary' ?>" type="button" data-action="back" hidden>Вернуться назад</button>
+<?php endif ?>
+  </div>
+<?php if (preg_match('/^RQ\d{5}$/', $code)): ?>
+  <p class="state-code">Код НСПК <?= h($code) ?></p>
+<?php endif ?>
+</section>
+<?php
+    return (string)ob_get_clean();
+}
+
+/** @param array{kind: string, code?: string, message?: string} $state */
+function render_state(array $state, bool $mobile): string
+{
+    return layout(
+        STATES[$state['kind']]['title'],
+        'class="' . ($mobile ? 'is-mobile' : 'is-desktop') . ' is-state"',
+        state_section($state),
+    );
+}
+
+/**
+ * @param array{
+ *     qrcId: string,
+ *     banks: list<array{name: string, schema: string, logo: string, link: string}>,
+ *     amount: array{0: string, 1: string}|null,
+ *     nspkUrl: string, pageUrl: string, fallbackUrl: string, mobile: bool,
+ *     merchant?: string|null, verified?: bool, sig?: string, expiresIn?: int|null
+ * } $v
+ */
+function render_page(array $v): string
+{
+    $title = $v['amount'] !== null ? $v['amount'][0] . "\u{00A0}" . $v['amount'][1] . ' — оплата через СБП' : 'Оплата через СБП';
+    $merchant = (string)($v['merchant'] ?? '');
+    $attrs = 'class="' . ($v['mobile'] ? 'is-mobile' : 'is-desktop') . '" data-qrc="' . h($v['qrcId']) . '"'
+        . (isset($v['sig']) ? ' data-sig="' . h($v['sig']) . '"' : '')
+        . (!empty($v['verified']) ? ' data-status="ok"' : '')
+        . (isset($v['expiresIn']) ? ' data-exp-in="' . (int)$v['expiresIn'] . '"' : '');
+
+    ob_start();
+    ?>
+  <div class="summary">
+<?php if ($v['amount'] !== null): ?>
+    <h1 class="amount"><?= h($v['amount'][0]) ?><span class="cur"><?= h($v['amount'][1]) ?></span></h1>
+<?php else: ?>
+    <h1 class="title">Оплата через СБП</h1>
+<?php endif ?>
+    <p class="merchant"<?= $merchant === '' ? ' hidden' : '' ?>><span>Получатель</span> <b><?= h($merchant) ?></b></p>
+    <div class="timer" hidden>
+      <p><span>Оплатите в течение</span> <b class="timer-left"></b></p>
+      <span class="timer-bar"><i></i></span>
+    </div>
+    <p class="lead only-mobile">Выберите банк, и его приложение откроется с уже заполненным платежом</p>
+    <p class="lead only-desktop">Отсканируйте QR-код в приложении банка на телефоне</p>
+  </div>
+
   <div class="alert" role="alert" hidden>
     <?= icon('alert') ?>
-    <div>
-      <p class="alert-text"></p>
-      <p class="alert-hint" hidden>Вернитесь в магазин и создайте платёж заново.</p>
-    </div>
+    <p class="alert-text"></p>
   </div>
 
   <section class="panel banks" id="banks" aria-labelledby="banks-title">
@@ -151,13 +287,11 @@ function render_page(array $v): string
     </ul>
     <a class="more" href="<?= h($v['fallbackUrl']) ?>">Открыть страницу оплаты НСПК<?= icon('arrow') ?></a>
   </details>
-</main>
+<?php
+    $main = (string)ob_get_clean();
 
-<footer class="foot">
-  <img src="/assets/sbp-wordmark.svg" width="62" height="24" alt="СБП, Система быстрых платежей">
-  <p>Деньги списываются в приложении вашего банка</p>
-</footer>
-
+    ob_start();
+    ?>
 <dialog class="sheet" id="web-banks" aria-labelledby="sheet-title">
   <div class="sheet-top">
     <div class="sheet-head">
@@ -169,10 +303,9 @@ function render_page(array $v): string
     </div>
   </div>
 </dialog>
-<script src="<?= h(asset('qrcode.js')) ?>" defer></script>
-<script src="<?= h(asset('app.js')) ?>" defer></script>
-</body>
-</html>
+<?php foreach (['expired', 'started', 'invalid'] as $kind): ?>
+<template id="state-<?= $kind ?>"><?= state_section(['kind' => $kind]) ?></template>
+<?php endforeach ?>
 <?php
-    return (string)ob_get_clean();
+    return layout($title, $attrs, $main, (string)ob_get_clean());
 }

@@ -1,3 +1,14 @@
+FROM node:22-alpine AS assets
+WORKDIR /build
+RUN npm install --no-save --no-audit --no-fund --loglevel=error esbuild@0.28.2
+COPY public/assets/qrcode.js public/assets/app.js public/assets/app.css ./
+# Один JS без комментариев и с короткими именами, ужатый CSS, имена файлов — хеши содержимого.
+RUN cat qrcode.js app.js > bundle.js \
+ && npx esbuild bundle.js --minify --format=iife --target=es2018 --legal-comments=none \
+      '--banner:js=/*! qrcode-generator (c) Kazuhiko Arase, MIT */' '--entry-names=[hash]' --outdir=out \
+ && npx esbuild app.css --minify --legal-comments=none '--entry-names=[hash]' --outdir=out \
+ && printf '{"app.js":"%s","app.css":"%s"}' "$(cd out && ls *.js)" "$(cd out && ls *.css)" > manifest.json
+
 FROM php:8.4-apache
 
 # GD с JPEG: среди .png-логотипов НСПК попадаются JPEG.
@@ -18,7 +29,11 @@ COPY docker/apache.conf /etc/apache2/sites-available/000-default.conf
 COPY docker/php.ini /usr/local/etc/php/conf.d/zz-mirror.ini
 COPY src/ /var/www/src/
 COPY data/ /var/www/data/
+COPY bin/ /var/www/bin/
 COPY tests/unit_test.php /var/www/tests/
 COPY public/ /var/www/html/
+COPY --from=assets /build/out/ /var/www/html/assets/b/
+COPY --from=assets /build/manifest.json /var/www/data/assets.json
+RUN rm /var/www/html/assets/app.js /var/www/html/assets/app.css /var/www/html/assets/qrcode.js
 
 HEALTHCHECK --interval=10s --timeout=3s --retries=3 CMD curl -fsS http://127.0.0.1/_mirror/health || exit 1

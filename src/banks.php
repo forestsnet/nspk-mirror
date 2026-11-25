@@ -128,16 +128,35 @@ function qrc_id(string $path): ?string
 }
 
 /**
- * Query ссылки без служебных параметров виджета НСПК (wg_*), в исходном виде и порядке:
+ * Query ссылки без служебных параметров виджета НСПК (wg_*) и зеркала (mx_*), в исходном виде и порядке:
  * параметры статических QR (sum, cur, crc) должны дойти до приложения банка без изменений.
+ * $keepMirror оставляет mx_* для адреса самой страницы зеркала.
  */
-function clean_query(string $query): string
+function clean_query(string $query, bool $keepMirror = false): string
 {
     $parts = array_filter(
         explode('&', ltrim($query, '?')),
-        static fn(string $p): bool => $p !== '' && !str_starts_with(strtolower($p), 'wg_'),
+        static function (string $p) use ($keepMirror): bool {
+            $name = strtolower($p);
+            return $p !== '' && !str_starts_with($name, 'wg_') && ($keepMirror || !str_starts_with($name, 'mx_'));
+        },
     );
     return $parts ? '?' . implode('&', $parts) : '';
+}
+
+/**
+ * Секунды до mx_exp — unix-времени, когда QR перестанет действовать. НСПК срок не отдаёт,
+ * его передаёт проект. null, если параметра нет или он вне разумных пределов.
+ */
+function expires_in(string $query, int $now): ?int
+{
+    parse_str(ltrim($query, '?'), $q);
+    $exp = $q['mx_exp'] ?? null;
+    if (!is_string($exp) || !preg_match('/^\d{9,11}$/', $exp)) {
+        return null;
+    }
+    $left = (int)$exp - $now;
+    return $left > -86400 && $left < 7 * 86400 ? $left : null;
 }
 
 /**

@@ -21,16 +21,19 @@ const LINK_ERRORS = [
     'RQ05022' => 'По этому QR‑коду уже началась оплата, дождитесь ее завершения.',
 ];
 const EXPIRED_CODES = ['RQ05014', 'RQ05016', 'RQ05027'];
-const LINK_OK_TTL = 300;
+const STARTED_CODES = ['RQ05301', 'RQ05022'];
+const LINK_ERROR_TTL = 10;
+// Открытая страница перепроверяет ссылку раз в 30 секунд, кэш успеха не должен быть дольше.
+const LINK_OK_TTL = 30;
 const LINK_REJECTED_TTL = 60;
 
 /**
  * Данные платежа по QRC_ID из payment-link API НСПК: сумма, получатель или причина отказа.
- * Успех кэшируется на 5 минут, отказ на минуту, сетевые ошибки и 403 не кэшируются.
+ * Успех кэшируется на 30 секунд, отказ на минуту, сетевые ошибки и 403 не кэшируются.
  *
- * @return array{status: string, amount?: string, amountLabel?: string, merchant?: string, code?: string, message?: string, expired?: bool}
+ * @return array{status: string, amount?: string, amountLabel?: string, merchant?: string, merchantId?: string, legalId?: string, code?: string, message?: string, expired?: bool}
  */
-function link_info(string $qrcId, string $userAgent): array
+function link_info(string $qrcId, string $userAgent, int $timeout = 6): array
 {
     $key = "link/$qrcId";
     $copy = cache_read($key, LINK_OK_TTL);
@@ -42,22 +45,113 @@ function link_info(string $qrcId, string $userAgent): array
         }
     }
 
-    $res = cached_get(API_CONFIG_URL, MEMBERS_TTL, [], 5);
+    $res = cached_get(API_CONFIG_URL, MEMBERS_TTL, [], 3);
     $config = parse_api_config($res['status'] === 200 ? $res['body'] : '');
     $up = upstream_request('GET', $config['baseURL'] . '/' . $qrcId, array_merge([
         'Accept: application/json',
         'Origin: https://' . QR_HOST,
         'Referer: https://' . QR_HOST . '/',
         'User-Agent: ' . ($userAgent !== '' ? $userAgent : 'Mozilla/5.0'),
-    ], pow_headers($config['params'])), null, 6);
+    ], pow_headers($config['params'])), null, $timeout);
 
     $info = parse_link_response($up['status'], $up['body'], $config['errors']);
-    $ttl = ['ok' => LINK_OK_TTL, 'rejected' => LINK_REJECTED_TTL][$info['status']] ?? 0;
-    if ($ttl > 0) {
-        cache_write($key, (string)json_encode($info + ['expires' => time() + $ttl], JSON_UNESCAPED_UNICODE), 'application/json');
-    } else {
+    if ($info['status'] === 'error') {
         error_log(sprintf('nspk-mirror: payment-link %s: HTTP %d %s', $qrcId, $up['status'], $up['error'] ?: substr($up['body'], 0, 200)));
     }
+    // Ошибку держим недолго: при лежащем НСПК каждое открытие страницы иначе ждало бы таймаут.
+    $ttl = ['ok' => LINK_OK_TTL, 'rejected' => LINK_REJECTED_TTL][$info['status']] ?? LINK_ERROR_TTL;
+    cache_write($key, (string)json_encode($info + ['expires' => time() + $ttl], JSON_UNESCAPED_UNICODE), 'application/json');
+    return $info;
+}
+
+/**
+ * Какой экран показать вместо оплаты. null — ссылка в порядке либо НСПК не ответила, а строгого режима нет.
+ * QR чужого мерчанта выглядит как недействительная ссылка.
+ *
+ * @param array{status: string, code?: string, message?: string, expired?: bool} $info
+ * @param list<string> $allowed
+ * @return array{kind: string, code?: string, message?: string}|null
+ */
+function link_state(array $info, array $allowed, bool $strict): ?array
+{
+    if ($info['status'] === 'ok') {
+        return merchant_allowed($info, $allowed) ? null : ['kind' => 'invalid'];
+    }
+    if ($info['status'] === 'rejected') {
+        $code = (string)($info['code'] ?? '');
+        $kind = !empty($info['expired']) ? 'expired' : (in_array($code, STARTED_CODES, true) ? 'started' : 'error');
+        return ['kind' => $kind, 'code' => $code, 'message' => (string)($info['message'] ?? '')];
+    }
+    return $strict && $allowed !== [] ? ['kind' => 'unavailable'] : null;
+}
+
+/**
+ * Мерчанты, которым зеркало показывает оплату: merchantId или legalId из ответа НСПК через запятую.
+ * Пустой список — проверки нет.
+ *
+ * @return list<string>
+ */
+function allowed_merchants(): array
+{
+    return array_values(array_filter(array_map('trim', explode(',', strtoupper((string)getenv('ALLOWED_MERCHANTS'))))));
+}
+
+/**
+ * @param array{merchantId?: string, legalId?: string} $info
+ * @param list<string> $allowed
+ */
+function merchant_allowed(array $info, array $allowed): bool
+{
+    return $allowed === []
+        || in_array($info['merchantId'] ?? '', $allowed, true)
+        || in_array($info['legalId'] ?? '', $allowed, true);
+}
+
+function strict_mode(): bool
+{
+    return getenv('MERCHANT_STRICT') === '1';
+}
+
+/** Подпись QRC_ID для /api/link: эндпоинт отвечает только страницам, которые отдало само зеркало. */
+function link_sig(string $qrcId): string
+{
+    return substr(hash_hmac('sha256', $qrcId, mirror_secret()), 0, 24);
+}
+
+/** Секрет из MIRROR_SECRET, иначе один раз создаётся в томе кэша и переживает пересборку. */
+function mirror_secret(): string
+{
+    static $secret = null;
+    if ($secret !== null) {
+        return $secret;
+    }
+    $env = (string)getenv('MIRROR_SECRET');
+    if (strlen($env) >= 16) {
+        return $secret = $env;
+    }
+    $file = CACHE_DIR . '/secret';
+    $fh = @fopen($file, 'x');
+    if ($fh !== false) {
+        fwrite($fh, bin2hex(random_bytes(32)));
+        fclose($fh);
+    }
+    $stored = (string)@file_get_contents($file);
+    return $secret = strlen($stored) >= 32 ? $stored : hash('sha256', __FILE__ . php_uname());
+}
+
+/**
+ * Ответ /api/link для страницы: без merchantId и legalId, с готовым экраном для отказа.
+ *
+ * @param array{status: string} $info
+ * @return array<string, mixed>
+ */
+function public_link_info(array $info, ?array $state): array
+{
+    if ($state !== null) {
+        return ['status' => 'rejected', 'state' => $state['kind']]
+            + array_filter(['code' => $state['code'] ?? null, 'message' => $state['message'] ?? null]);
+    }
+    unset($info['merchantId'], $info['legalId']);
     return $info;
 }
 
@@ -124,6 +218,12 @@ function parse_link_response(int $status, string $body, array $errors): array
         $merchant = trim((string)($data['data']['brandName'] ?? ''));
         if ($merchant !== '') {
             $info['merchant'] = mb_substr($merchant, 0, 80);
+        }
+        foreach (['merchantId', 'legalId'] as $field) {
+            $id = strtoupper(trim((string)($data['data'][$field] ?? '')));
+            if (preg_match('/^[A-Z]{2}\d{6,16}$/', $id)) {
+                $info[$field] = $id;
+            }
         }
         return $info;
     }

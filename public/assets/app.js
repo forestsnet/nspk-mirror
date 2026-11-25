@@ -15,7 +15,7 @@
     else img.addEventListener('error', broken, { once: true });
   }
 
-  const KEY = 'sbp-mirror:last-bank';
+  const KEY = 'sbp:last-bank';
   const grid = document.querySelector('.grid');
   let last = null;
   try { last = localStorage.getItem(KEY); } catch { /* хранилище недоступно */ }
@@ -172,43 +172,118 @@
 
   if (!isMobile) drawQr();
 
+  // Экраны вместо оплаты: «назад» в магазин, если есть куда, и повторная проверка.
+  function wireState(root) {
+    const back = root.querySelector('[data-action="back"]');
+    if (back) {
+      back.hidden = history.length < 2;
+      back.addEventListener('click', () => history.back());
+    }
+    root.querySelector('[data-action="reload"]')?.addEventListener('click', () => location.reload());
+  }
+  for (const section of document.querySelectorAll('main .state')) wireState(section);
+
+  const known = { amount: '', merchant: '' };
+  const summaryTitle = document.querySelector('.summary h1');
+  if (summaryTitle && summaryTitle.classList.contains('amount')) known.amount = summaryTitle.firstChild.textContent;
+  known.merchant = document.querySelector('.merchant b')?.textContent || '';
+  let finished = false;
+  let timerHandle = 0;
+
+  function showState(kind, code) {
+    const tpl = document.getElementById(`state-${kind}`);
+    if (!tpl) return false;
+    if (finished) return true;
+    finished = true;
+    clearInterval(timerHandle);
+    const section = tpl.content.firstElementChild.cloneNode(true);
+    const meta = [known.amount && `${known.amount} ₽`, known.merchant].filter(Boolean).join(' · ');
+    if (meta) {
+      const el = section.querySelector('.state-meta');
+      el.textContent = meta;
+      el.hidden = false;
+    }
+    if (code && /^RQ\d{5}$/.test(code)) {
+      const el = document.createElement('p');
+      el.className = 'state-code';
+      el.textContent = `Код НСПК ${code}`;
+      section.append(el);
+    }
+    if (sheet && sheet.open) sheet.close();
+    sheet?.remove();
+    document.querySelector('main').replaceChildren(section);
+    body.classList.add('is-state');
+    document.title = section.querySelector('.state-title').textContent;
+    wireState(section);
+    window.scrollTo(0, 0);
+    return true;
+  }
+
+  // Срок жизни QR приходит в mx_exp от проекта, сервер пересчитал его в секунды: часы телефона не мешают.
+  const timer = document.querySelector('.timer');
+  const expIn = Number(body.dataset.expIn);
+  if (timer && body.dataset.expIn !== undefined && Number.isFinite(expIn) && expIn > 0) {
+    const deadline = Date.now() + expIn * 1000;
+    const left = timer.querySelector('.timer-left');
+    const bar = timer.querySelector('.timer-bar i');
+    const tick = () => {
+      const sec = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      left.textContent = `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
+      bar.style.transform = `scaleX(${sec / expIn})`;
+      timer.classList.toggle('is-low', sec <= 60);
+      if (sec === 0) showState('expired');
+    };
+    timer.hidden = false;
+    tick();
+    timerHandle = setInterval(tick, 1000);
+  }
+
+  // Пока страница открыта, ссылка перепроверяется у НСПК: раз в 30 секунд и при возвращении во вкладку.
   const qrcId = body.dataset.qrc;
-  if (qrcId && 'fetch' in window) {
-    fetch(`/api/link/${encodeURIComponent(qrcId)}`, { headers: { Accept: 'application/json' } })
+  const sig = body.dataset.sig;
+  function check() {
+    if (finished) return;
+    fetch(`/api/link/${encodeURIComponent(qrcId)}?s=${encodeURIComponent(sig)}`, { headers: { Accept: 'application/json' } })
       .then((res) => (res.ok ? res.json() : null))
       .then((info) => { if (info) showLink(info); })
-      .catch(() => { /* без суммы страница работает как раньше */ });
+      .catch(() => { /* без ответа страница работает как раньше */ });
+  }
+  if (qrcId && sig && 'fetch' in window) {
+    if (body.dataset.status !== 'ok') check();
+    setInterval(() => { if (document.visibilityState === 'visible') check(); }, 30000);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') check(); });
   }
 
   function showLink(info) {
-    const head = document.querySelector('.head');
     if (info.status === 'ok') {
-      const h1 = head.querySelector('h1');
-      const same = h1.classList.contains('amount') && h1.firstChild && h1.firstChild.textContent === info.amountLabel;
-      if (info.amountLabel && !same) {
+      const summary = document.querySelector('.summary');
+      if (!summary) return;
+      if (info.amountLabel && info.amountLabel !== known.amount) {
         const amount = document.createElement('h1');
         const cur = document.createElement('span');
         amount.className = 'amount is-new';
         cur.className = 'cur';
         cur.textContent = '₽';
         amount.append(info.amountLabel, cur);
-        h1.replaceWith(amount);
+        summary.querySelector('h1').replaceWith(amount);
         document.title = `${info.amountLabel} ₽ — оплата через СБП`;
+        known.amount = info.amountLabel;
       }
-      if (info.merchant) {
-        const merchant = head.querySelector('.merchant');
+      if (info.merchant && info.merchant !== known.merchant) {
+        const merchant = summary.querySelector('.merchant');
         merchant.querySelector('b').textContent = info.merchant;
         merchant.hidden = false;
         merchant.classList.add('is-new');
+        known.merchant = info.merchant;
       }
       return;
     }
-    if (info.status === 'rejected' && info.message) {
-      const alert = document.querySelector('.alert');
+    if (info.status !== 'rejected') return;
+    if (['expired', 'started', 'invalid'].includes(info.state) && showState(info.state, info.code)) return;
+    const alert = document.querySelector('.alert');
+    if (alert && info.message) {
       alert.querySelector('.alert-text').textContent = info.message;
-      alert.querySelector('.alert-hint').hidden = !info.expired;
       alert.hidden = false;
-      body.classList.toggle('is-expired', Boolean(info.expired));
     }
   }
 })();

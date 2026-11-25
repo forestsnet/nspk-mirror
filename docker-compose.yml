@@ -8,6 +8,9 @@ services:
     restart: unless-stopped
     environment:
       MIRROR_ORIGIN: ${MIRROR_ORIGIN:-}
+      ALLOWED_MERCHANTS: ${ALLOWED_MERCHANTS:-}
+      MERCHANT_STRICT: ${MERCHANT_STRICT:-0}
+      MIRROR_SECRET: ${MIRROR_SECRET:-}
     volumes:
       - cache:/var/cache/nspk-mirror
     networks:

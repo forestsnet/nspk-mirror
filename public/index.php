@@ -13,6 +13,11 @@ require __DIR__ . '/../src/page.php';
 
 const MAX_REQUEST_BODY = 65536;
 const STATIC_TTL = 86400;
+// Проверка ссылки перед отрисовкой страницы: дольше не ждём, страница досчитает сама.
+const RENDER_CHECK_TIMEOUT = 3;
+
+// Пути, которые уходят в прокси НСПК. Остальное, кроме своих маршрутов, — экран «Ссылка недействительна».
+const PROXY_PREFIXES = ['/nspk/', '/_cbr/', '/qr/', '/proxyapp/', '/static/'];
 
 // Статика НСПК, которая отдаётся из дискового кэша.
 const STATIC_PREFIXES = ['/proxyapp/logo/', '/proxyapp/uniqr/', '/static/', '/woff2/', '/favicon.ico'];
@@ -42,6 +47,33 @@ function plain(int $status, string $text): never
     header('Content-Type: text/plain; charset=utf-8');
     header('Cache-Control: no-store');
     echo $text;
+    exit;
+}
+
+function send_html(int $status, string $html, bool $headOnly): never
+{
+    http_response_code($status);
+    header('Content-Type: text/html; charset=utf-8');
+    header('Cache-Control: no-store');
+    header('Content-Security-Policy: ' . PAGE_CSP);
+    header('Referrer-Policy: no-referrer');
+    header('X-Content-Type-Options: nosniff');
+    header('Content-Length: ' . strlen($html));
+    if (!$headOnly) {
+        echo $html;
+    }
+    exit;
+}
+
+function send_json(int $status, array $data): never
+{
+    $json = (string)json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    http_response_code($status);
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store');
+    header('X-Content-Type-Options: nosniff');
+    header('Content-Length: ' . strlen($json));
+    echo $json;
     exit;
 }
 
@@ -80,6 +112,39 @@ function send_upstream(int $status, array $headers, string $body, string $host, 
     exit;
 }
 
+/** Запрос пришёл со страницы самого зеркала. Браузеры ставят Sec-Fetch-Site, для старых смотрим Origin и Referer. */
+function same_origin(array $server, string $origin): bool
+{
+    $site = strtolower((string)($server['HTTP_SEC_FETCH_SITE'] ?? ''));
+    if ($site !== '') {
+        return $site === 'same-origin';
+    }
+    foreach (['HTTP_ORIGIN', 'HTTP_REFERER'] as $name) {
+        $value = (string)($server[$name] ?? '');
+        if ($value !== '') {
+            return $value === $origin || str_starts_with($value, $origin . '/');
+        }
+    }
+    return false;
+}
+
+/**
+ * Проверка ссылки у НСПК и списка мерчантов перед тем, как показать оплату.
+ *
+ * @return array{0: array<string, mixed>, 1: array{kind: string, code?: string, message?: string}|null}
+ */
+function check_link(string $qrcId, string $ua): array
+{
+    $allowed = allowed_merchants();
+    $info = link_info($qrcId, $ua, RENDER_CHECK_TIMEOUT);
+    $state = link_state($info, $allowed, strict_mode());
+    if ($state !== null && $state['kind'] === 'invalid' && $info['status'] === 'ok') {
+        error_log(sprintf('nspk-mirror: blocked %s merchant=%s legal=%s brand=%s',
+            $qrcId, $info['merchantId'] ?? '-', $info['legalId'] ?? '-', $info['merchant'] ?? '-'));
+    }
+    return [$info, $state];
+}
+
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 $uri = $_SERVER['REQUEST_URI'] ?? '/';
 $qpos = strpos($uri, '?');
@@ -87,6 +152,8 @@ $path = $qpos === false ? $uri : substr($uri, 0, $qpos);
 $query = $qpos === false ? '' : substr($uri, $qpos);
 $origin = detect_origin($_SERVER, getenv('MIRROR_ORIGIN') ?: null);
 $readOnly = $method === 'GET' || $method === 'HEAD';
+$ua = (string)($_SERVER['HTTP_USER_AGENT'] ?? '');
+$mobile = is_mobile_ua($ua);
 
 if ($path === '/_mirror/health') {
     plain(200, "ok\n");
@@ -95,23 +162,27 @@ if (!in_array($method, ['GET', 'HEAD', 'POST', 'OPTIONS'], true)) {
     header('Allow: GET, HEAD, POST, OPTIONS');
     plain(405, "Method Not Allowed\n");
 }
-// Service worker НСПК на корне перехватывал бы /<QRC_ID> и подсовывал свою страницу, поэтому он есть только под /nspk/.
-if ($path === '/' || $path === '/serviceWorker.js') {
-    plain(404, "Not Found\n");
-}
 
 if (preg_match('#^/api/link/([A-Za-z0-9]{32})$#', $path, $m) && $method === 'GET') {
-    $json = (string)json_encode(link_info($m[1], (string)($_SERVER['HTTP_USER_AGENT'] ?? '')), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    header('Content-Type: application/json; charset=utf-8');
-    header('Cache-Control: no-store');
-    header('X-Content-Type-Options: nosniff');
-    header('Content-Length: ' . strlen($json));
-    echo $json;
-    exit;
+    parse_str(ltrim($query, '?'), $q);
+    if (!hash_equals(link_sig($m[1]), (string)($q['s'] ?? ''))) {
+        plain(403, "Forbidden\n");
+    }
+    $info = link_info($m[1], $ua);
+    send_json(200, public_link_info($info, link_state($info, allowed_merchants(), false)));
 }
 
 $qrcId = qrc_id($path);
 if ($qrcId !== null && $readOnly) {
+    $expiresIn = expires_in($query, time());
+    if ($expiresIn !== null && $expiresIn <= 0) {
+        send_html(410, render_state(['kind' => 'expired'], $mobile), $method === 'HEAD');
+    }
+    [$info, $state] = check_link($qrcId, $ua);
+    if ($state !== null) {
+        send_html(STATES[$state['kind']]['http'], render_state($state, $mobile), $method === 'HEAD');
+    }
+
     $clean = clean_query($query);
     $banks = [];
     foreach (load_banks() as $bank) {
@@ -122,40 +193,58 @@ if ($qrcId !== null && $readOnly) {
         header('Location: /nspk/' . $qrcId . $clean, true, 302);
         exit;
     }
-    $html = render_page([
+    send_html(200, render_page([
         'qrcId' => $qrcId,
         'banks' => $banks,
-        'amount' => amount_parts($clean),
+        'amount' => isset($info['amountLabel']) ? [$info['amountLabel'], '₽'] : amount_parts($clean),
+        'merchant' => $info['merchant'] ?? null,
+        'verified' => $info['status'] === 'ok',
+        'sig' => link_sig($qrcId),
+        'expiresIn' => $expiresIn,
         'nspkUrl' => 'https://' . QR_HOST . '/' . $qrcId . $clean,
-        'pageUrl' => $origin . '/' . $qrcId . $clean,
+        'pageUrl' => $origin . '/' . $qrcId . clean_query($query, true),
         'fallbackUrl' => '/nspk/' . $qrcId . $clean,
-        'mobile' => is_mobile_ua((string)($_SERVER['HTTP_USER_AGENT'] ?? '')),
-    ]);
-    header('Content-Type: text/html; charset=utf-8');
-    header('Cache-Control: no-store');
-    header('Content-Security-Policy: ' . PAGE_CSP);
-    header('Referrer-Policy: no-referrer');
-    header('X-Content-Type-Options: nosniff');
-    header('Content-Length: ' . strlen($html));
-    if ($method === 'GET') {
-        echo $html;
-    }
-    exit;
+        'mobile' => $mobile,
+    ]), $method === 'HEAD');
 }
 
 if (preg_match('#^/logo/(\d{2,3})/(bank\d{12}\.png)$#', $path, $m) && $readOnly) {
     $res = logo((int)$m[1], $m[2]);
     if ($res['status'] !== 200) {
-        plain($res['status'] === 404 ? 404 : 502, "Logo unavailable\n");
+        plain($res['status'] === 404 ? 404 : 502, "Not Found\n");
     }
     header('Content-Type: ' . $res['type']);
     header('Cache-Control: public, max-age=604800');
-    header('X-Mirror-Cache: ' . $res['cache']);
+    header('X-Cache: ' . $res['cache']);
     header('Content-Length: ' . strlen($res['body']));
     if ($method === 'GET') {
         echo $res['body'];
     }
     exit;
+}
+
+// Страница НСПК целиком проходит ту же проверку ссылки и мерчанта, что и своя.
+if (preg_match('#^/nspk/([A-Za-z0-9]{32})$#', $path, $m) && $readOnly) {
+    [, $state] = check_link($m[1], $ua);
+    if ($state !== null) {
+        send_html(STATES[$state['kind']]['http'], render_state($state, $mobile), $method === 'HEAD');
+    }
+}
+
+$proxied = $path === '/favicon.ico';
+foreach (PROXY_PREFIXES as $prefix) {
+    $proxied = $proxied || str_starts_with($path, $prefix);
+}
+if (!$proxied) {
+    if ($path === '/serviceWorker.js' || preg_match('#\.[a-z0-9]{1,5}$#i', $path)) {
+        plain(404, "Not Found\n");
+    }
+    send_html(404, render_state(['kind' => 'invalid'], $mobile), $method === 'HEAD');
+}
+
+// API cbrpay.ru отвечает только страницам с этого же домена, иначе зеркало стало бы открытым прокси к НСПК.
+if (str_starts_with($path, CBR_PREFIX) && !same_origin($_SERVER, $origin)) {
+    plain(403, "Forbidden\n");
 }
 
 $route = route($uri);
@@ -168,7 +257,7 @@ $upPathOnly = strtok($upPath, '?') ?: '/';
 foreach (STATIC_PREFIXES as $static) {
     if ($method === 'GET' && $host === QR_HOST && str_starts_with($upPathOnly, $static)) {
         $res = cached_get('https://' . QR_HOST . $upPath, STATIC_TTL);
-        $headers = [['content-type', $res['type']], ['x-mirror-cache', $res['cache']]];
+        $headers = [['content-type', $res['type']], ['x-cache', $res['cache']]];
         if ($res['status'] === 200) {
             $headers[] = ['cache-control', 'public, max-age=' . STATIC_TTL];
         }
