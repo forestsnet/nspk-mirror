@@ -1,5 +1,5 @@
 name: Ошибка
-description: Зеркало работает не так, как описано в README
+description: Зеркало работает не так, как описано в документации
 labels: [bug]
 body:
   - type: textarea

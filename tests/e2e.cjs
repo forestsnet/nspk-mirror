@@ -1,5 +1,5 @@
 'use strict';
-// Запуск: node tests/e2e.cjs [url ...], нужен playwright-core (см. README).
+// Запуск: node tests/e2e.cjs [url ...], нужен playwright-core (см. docs/development.md).
 // Для сравнения с оригиналом можно передать https://qr.nspk.ru/<QRC_ID>, сертификат НУЦ игнорируется.
 const { chromium } = require('playwright-core');
 
