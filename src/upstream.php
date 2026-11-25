@@ -1,5 +1,4 @@
 <?php
-// Запросы к апстримам НСПК и cbrpay.ru и дисковый кэш для статики.
 declare(strict_types=1);
 
 namespace NspkMirror;

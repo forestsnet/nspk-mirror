@@ -1,0 +1,28 @@
+# Только HTTP. TLS снимает Cloudflare, балансировщик или nginx хоста.
+# ${MIRROR_DOMAIN} подставляет envsubst официального образа nginx при старте.
+
+map $http_x_forwarded_proto $mirror_proto {
+    default $http_x_forwarded_proto;
+    ""      $scheme;
+}
+
+limit_req_zone $binary_remote_addr zone=mirror:10m rate=10r/s;
+limit_req_status 429;
+
+# За Cloudflare лимит иначе считается по адресам его узлов. Сети брать с https://www.cloudflare.com/ips/,
+# для другого прокси заголовок обычно X-Forwarded-For.
+# real_ip_header CF-Connecting-IP;
+# set_real_ip_from 173.245.48.0/20;
+# set_real_ip_from 103.21.244.0/22;
+
+server {
+    listen 80 default_server;
+    server_name ${MIRROR_DOMAIN};
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/acme;
+        default_type text/plain;
+    }
+
+    include /etc/nginx/snippets/mirror.conf;
+}

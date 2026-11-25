@@ -1,0 +1,8 @@
+services:
+  mirror:
+    ports:
+      - "127.0.0.1:${MIRROR_PORT:-8080}:80"
+
+  nginx:
+    profiles:
+      - disabled

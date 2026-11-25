@@ -1,5 +1,4 @@
 <?php
-// Своя страница оплаты по QR-ссылке СБП: банки с диплинками, QR-код, помощь.
 declare(strict_types=1);
 
 namespace NspkMirror;
@@ -70,18 +69,18 @@ function render_page(array $v): string
 <link rel="stylesheet" href="<?= h(asset('app.css')) ?>">
 </head>
 <body class="<?= $v['mobile'] ? 'is-mobile' : 'is-desktop' ?>">
-<main class="shell">
-  <header class="head">
-    <span class="chip"><img src="/assets/sbp-mark.svg" width="14" height="17" alt="">Система быстрых платежей</span>
+<header class="head">
+  <span class="chip"><img src="/assets/sbp-mark.svg" width="14" height="17" alt="">Система быстрых платежей</span>
 <?php if ($v['amount'] !== null): ?>
-    <h1 class="amount"><?= h($v['amount'][0]) ?><span class="cur"><?= h($v['amount'][1]) ?></span></h1>
+  <h1 class="amount"><?= h($v['amount'][0]) ?><span class="cur"><?= h($v['amount'][1]) ?></span></h1>
 <?php else: ?>
-    <h1 class="title">Оплата через СБП</h1>
+  <h1 class="title">Оплата через СБП</h1>
 <?php endif ?>
-    <p class="lead only-mobile">Выберите банк, и его приложение откроется с уже заполненным платежом</p>
-    <p class="lead only-desktop">Отсканируйте QR-код в приложении банка на телефоне</p>
-  </header>
+  <p class="lead only-mobile">Выберите банк, и его приложение откроется с уже заполненным платежом</p>
+  <p class="lead only-desktop">Отсканируйте QR-код в приложении банка на телефоне</p>
+</header>
 
+<main class="shell">
   <section class="panel banks" id="banks" aria-labelledby="banks-title">
     <h2 class="panel-title" id="banks-title">Выберите банк</h2>
     <label class="search">
@@ -141,12 +140,12 @@ function render_page(array $v): string
     </ul>
     <a class="more" href="<?= h($v['fallbackUrl']) ?>">Открыть страницу оплаты НСПК<?= icon('arrow') ?></a>
   </details>
-
-  <footer class="foot">
-    <img src="/assets/sbp-wordmark.svg" width="62" height="24" alt="СБП, Система быстрых платежей">
-    <p>Деньги списываются в приложении вашего банка</p>
-  </footer>
 </main>
+
+<footer class="foot">
+  <img src="/assets/sbp-wordmark.svg" width="62" height="24" alt="СБП, Система быстрых платежей">
+  <p>Деньги списываются в приложении вашего банка</p>
+</footer>
 
 <dialog class="sheet" id="web-banks" aria-labelledby="sheet-title">
   <div class="sheet-head">
@@ -156,7 +155,6 @@ function render_page(array $v): string
     </div>
     <button class="sheet-close" type="button" data-close aria-label="Закрыть"><?= icon('x') ?></button>
   </div>
-  <!-- На компьютере сюда переезжает список банков #banks -->
 </dialog>
 <script src="<?= h(asset('qrcode.js')) ?>" defer></script>
 <script src="<?= h(asset('app.js')) ?>" defer></script>

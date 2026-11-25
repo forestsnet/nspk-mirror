@@ -1,5 +1,3 @@
-/* 2026-11-25 — страница выбора банка СБП */
-
 @font-face {
   font-family: "Unbounded";
   font-style: normal;
@@ -53,9 +51,10 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 html { background: var(--bg); -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
-/* Атмосфера — фон самой страницы, а не фиксированный слой: зерно идёт по всей высоте документа,
-   свечение в цветах знака СБП привязано к верху и гаснет плавно, без шва при прокрутке */
+/* Фон документа, а не фиксированный слой, иначе на длинной странице виден шов. */
 body {
+  display: flex;
+  flex-direction: column;
   margin: 0;
   min-height: 100vh;
   min-height: 100dvh;
@@ -78,19 +77,22 @@ button { font: inherit; color: inherit; }
 [hidden] { display: none !important; }
 .i { flex: none; width: 24px; height: 24px; }
 
-.shell {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  width: 100%;
-  max-width: 520px;
-  margin: 0 auto;
-  padding: max(20px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
-}
-.is-desktop .shell { padding-top: 56px; }
+/* Шапка прижата к верху, подвал к низу, на компьютере содержимое по центру между ними */
+.head, .shell, .foot { width: 100%; max-width: 520px; margin-inline: auto; padding-inline: 16px; }
+.shell { display: flex; flex: 1 0 auto; flex-direction: column; gap: 14px; padding-top: 6px; padding-bottom: 20px; }
+.is-desktop .shell { justify-content: center; }
 
-/* Шапка по центру */
-.head { display: flex; flex-direction: column; align-items: center; padding: 4px 2px 6px; text-align: center; }
+/* Шапка */
+.head {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  padding-top: max(24px, env(safe-area-inset-top));
+  padding-bottom: 14px;
+  text-align: center;
+}
+.is-desktop .head { padding-top: 40px; }
 .chip {
   display: inline-flex;
   align-items: center;
@@ -368,7 +370,7 @@ button { font: inherit; color: inherit; }
   text-decoration: none;
 }
 
-/* Модалка «Оплатить в интернет-банке» на компьютере: шапка и поиск на месте, прокручивается сетка */
+/* Модалка интернет-банков */
 .sheet {
   width: min(680px, calc(100vw - 32px));
   max-height: min(780px, calc(100dvh - 48px));
@@ -428,20 +430,29 @@ html:has(.sheet[open]) { overflow: hidden; }
 }
 
 /* Подвал */
-.foot { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 14px 0 6px; color: var(--faint); font-size: 12.5px; text-align: center; }
+.foot {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding-top: 14px;
+  padding-bottom: max(20px, env(safe-area-inset-bottom));
+  color: var(--faint);
+  font-size: 12.5px;
+  text-align: center;
+}
 .foot p { margin: 0; }
 .foot img { width: 62px; height: 24px; }
 
-/* Телефон и компьютер: что видно и в каком порядке */
+/* Телефон и компьютер */
 .is-desktop .only-mobile, .is-mobile .only-desktop { display: none !important; }
 .only-ios { display: none; }
 .is-ios .only-ios { display: block; }
-.head { order: 0; }
 .banks { order: 1; }
 .actions { order: 2; }
 .qr-panel { order: 3; }
 .help { order: 4; }
-.foot { order: 5; }
 .is-desktop .qr-panel { order: 1; }
 .is-desktop .actions { order: 2; }
 .is-desktop .banks { order: 3; }

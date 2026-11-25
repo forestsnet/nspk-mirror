@@ -1,8 +1,7 @@
-# 2026-11-25 — зеркало оплаты СБП на PHP + Apache
 FROM php:8.4-apache
 
-# GD с PNG и JPEG — ресайз логотипов банков (у НСПК среди .png попадаются JPEG).
-# Самоподписанный сертификат — для локальной проверки по HTTPS, в проде TLS снимает nginx на хосте.
+# GD с JPEG: среди .png-логотипов НСПК попадаются JPEG.
+# Самоподписанный сертификат нужен только для локальной проверки по HTTPS (docker-compose.dev.yml).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends libpng-dev libjpeg62-turbo-dev \
  && docker-php-ext-configure gd --with-jpeg \
@@ -22,4 +21,4 @@ COPY data/ /var/www/data/
 COPY tests/unit_test.php /var/www/tests/
 COPY public/ /var/www/html/
 
-HEALTHCHECK --interval=30s --timeout=3s --retries=3 CMD curl -fsS http://127.0.0.1/_mirror/health || exit 1
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 CMD curl -fsS http://127.0.0.1/_mirror/health || exit 1

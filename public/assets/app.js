@@ -1,4 +1,3 @@
-// 2026-11-25 — страница выбора банка СБП: платформа, поиск, недавний банк, QR-код.
 (() => {
   'use strict';
 
@@ -10,14 +9,12 @@
   body.classList.toggle('is-desktop', !isMobile);
   body.classList.toggle('is-ios', isIOS);
 
-  // Логотип не загрузился — на плитке остаётся первая буква названия.
   for (const img of document.querySelectorAll('.logo img')) {
     const broken = () => img.parentElement.classList.add('is-broken');
     if (img.complete && img.naturalWidth === 0) broken();
     else img.addEventListener('error', broken, { once: true });
   }
 
-  // Банк, который выбирали в прошлый раз, ставим первым.
   const KEY = 'sbp-mirror:last-bank';
   const grid = document.querySelector('.grid');
   let last = null;
@@ -37,7 +34,6 @@
     try { localStorage.setItem(KEY, item.dataset.schema); } catch { /* приватный режим */ }
   });
 
-  // Поиск по названию и по привычным именам банков.
   const ALIASES = [
     [/^т банк$/, 'тинькофф тинькоф tinkoff tbank'],
     [/сбер/, 'sber sberbank'],
@@ -81,13 +77,13 @@
   };
   input?.addEventListener('input', filter);
 
-  // QR-код рисуем сами: каждый модуль — целое число пикселей, иначе на экране 1× края плывут.
   const panel = document.getElementById('qr');
   const qrImg = panel?.querySelector('.qr-img');
   const save = panel?.querySelector('[data-action="save-qr"]');
   let mode = 'app';
   let drawn = '';
 
+  // Каждый модуль занимает целое число пикселей, иначе на экране 1× края кода плывут.
   function paint(qr, cell, quiet) {
     const n = qr.getModuleCount();
     const canvas = document.createElement('canvas');
@@ -130,8 +126,7 @@
     drawQr();
   });
 
-  // На компьютере список банков живёт в модалке «Оплатить в интернет-банке».
-  // Без поддержки <dialog> остаётся раскрытие списком под кнопкой.
+  // Без поддержки <dialog> список банков раскрывается под кнопкой.
   const sheet = document.getElementById('web-banks');
   const banksPanel = document.getElementById('banks');
   const useSheet = !isMobile && Boolean(sheet && banksPanel && typeof sheet.showModal === 'function');
@@ -144,7 +139,6 @@
     });
   }
 
-  // «Показать QR-код» на телефоне и «Оплатить в интернет-банке» на компьютере.
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   for (const btn of document.querySelectorAll('[data-toggle]')) {
     if (useSheet && btn.dataset.toggle === 'show-banks') {

@@ -1,11 +1,6 @@
 'use strict';
-// Прогон страницы в headless Chromium как с iPhone, Android и десктопа.
-// Показывает текст страницы, ответы payment-link API, запросы мимо зеркала, ошибки,
-// диплинки в банки и данные QR-кода на десктопе.
-//
-//   NODE_PATH=<node_modules с playwright-core> node tests/e2e.cjs [url ...]
-//   По умолчанию https://127.0.0.1:8443/BD10103IQ18O3ISP8RGAM6FN3AP1N0GH
-//   Оригинал для сравнения: node tests/e2e.cjs https://qr.nspk.ru/<QRC_ID> (сертификат НУЦ игнорируется)
+// Запуск: node tests/e2e.cjs [url ...], нужен playwright-core (см. README).
+// Для сравнения с оригиналом можно передать https://qr.nspk.ru/<QRC_ID>, сертификат НУЦ игнорируется.
 const { chromium } = require('playwright-core');
 
 const urls = process.argv.slice(2);

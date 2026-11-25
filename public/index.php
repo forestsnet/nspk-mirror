@@ -1,10 +1,4 @@
 <?php
-// Зеркало оплаты СБП.
-//   /<QRC_ID>                 своя страница выбора банка с диплинками и QR-кодом
-//   /logo/<размер>/<файл>     логотипы банков под размер плитки
-//   /nspk/<QRC_ID>            страница НСПК целиком, запасной вариант
-//   остальное                 прозрачный прокси qr.nspk.ru и API cbrpay.ru для неё
-// Сертификаты НСПК и cbrpay.ru выпущены Russian Trusted Root CA, которому браузеры не доверяют.
 declare(strict_types=1);
 
 namespace NspkMirror;
@@ -18,7 +12,7 @@ require __DIR__ . '/../src/page.php';
 const MAX_REQUEST_BODY = 65536;
 const STATIC_TTL = 86400;
 
-// Статика НСПК, которую можно держать в дисковом кэше: логотипы, иконки, шрифты, картинки.
+// Статика НСПК, которая отдаётся из дискового кэша.
 const STATIC_PREFIXES = ['/proxyapp/logo/', '/proxyapp/uniqr/', '/static/', '/woff2/', '/favicon.ico'];
 
 // Не передаём апстриму: hop-by-hop, сведения о прокси перед нами, сжатие (его ведёт curl).
@@ -28,8 +22,8 @@ const DROP_REQUEST = [
     'x-real-ip', 'true-client-ip',
 ];
 
-// Не отдаём клиенту: hop-by-hop, сжатие (тело уже распаковано и переписано), политики апстрима,
-// вредные на чужом домене (HSTS с includeSubDomains, Alt-Svc, NEL, CSP со списком его хостов), служебное CDN.
+// Не отдаём клиенту: hop-by-hop, сжатие (тело уже распаковано), служебное CDN и политики апстрима,
+// вредные на чужом домене (HSTS с includeSubDomains, Alt-Svc, NEL, CSP со списком его хостов).
 const DROP_RESPONSE = [
     'connection', 'keep-alive', 'transfer-encoding', 'content-encoding', 'content-length',
     'strict-transport-security', 'alt-svc', 'report-to', 'nel', 'server',
@@ -74,7 +68,6 @@ function send_upstream(int $status, array $headers, string $body, string $host, 
     if ($headOnly || $status === 204 || $status === 304) {
         exit;
     }
-    // JSON с любого апстрима: логотипы и адреса API. HTML и JS страницы НСПК: ещё и база статики qr.nspk.ru.
     if (preg_match('#^application/(?:[a-z.+-]*\+)?json#', $type)) {
         $body = rewrite_json($body, $origin);
     } elseif ($host === QR_HOST && preg_match('#^(?:text/|application/(?:javascript|x-javascript))#', $type)) {
@@ -100,13 +93,11 @@ if (!in_array($method, ['GET', 'HEAD', 'POST', 'OPTIONS'], true)) {
     header('Allow: GET, HEAD, POST, OPTIONS');
     plain(405, "Method Not Allowed\n");
 }
-// Корень зеркалу не нужен. Service worker НСПК на корне перехватывал бы навигацию на /<QRC_ID>
-// и подсовывал свою страницу, поэтому его отдаём только под /nspk/.
+// Service worker НСПК на корне перехватывал бы /<QRC_ID> и подсовывал свою страницу, поэтому он есть только под /nspk/.
 if ($path === '/' || $path === '/serviceWorker.js') {
     plain(404, "Not Found\n");
 }
 
-// Своя страница выбора банка.
 $qrcId = qrc_id($path);
 if ($qrcId !== null && $readOnly) {
     $clean = clean_query($query);
@@ -139,7 +130,6 @@ if ($qrcId !== null && $readOnly) {
     exit;
 }
 
-// Логотипы банков под размер плитки.
 if (preg_match('#^/logo/(\d{2,3})/(bank\d{12}\.png)$#', $path, $m) && $readOnly) {
     $res = logo((int)$m[1], $m[2]);
     if ($res['status'] !== 200) {
@@ -155,7 +145,6 @@ if (preg_match('#^/logo/(\d{2,3})/(bank\d{12}\.png)$#', $path, $m) && $readOnly)
     exit;
 }
 
-// Дальше прозрачный прокси: страница НСПК под /nspk/, её статика и API cbrpay.ru.
 $route = route($uri);
 if ($route === null) {
     plain(404, "Not Found\n");

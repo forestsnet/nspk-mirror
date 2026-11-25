@@ -1,6 +1,4 @@
 <?php
-// Логотипы банков точно под плитку (×1, ×2, ×3). Исходники у НСПК от 104 до 460 px,
-// и браузерное сжатие до 40 px на экране 1× заметно мылит.
 declare(strict_types=1);
 
 namespace NspkMirror;
@@ -8,7 +6,12 @@ namespace NspkMirror;
 const LOGO_SIZES = [40, 80, 120];
 const LOGO_TTL = 7 * 86400;
 
-/** @return array{status: int, type: string, body: string, cache: string} */
+/**
+ * Логотип точно под плитку для экранов ×1, ×2, ×3. Исходники у НСПК от 88 до 460 px,
+ * и браузерное сжатие до 40 px на экране 1× заметно мылит.
+ *
+ * @return array{status: int, type: string, body: string, cache: string}
+ */
 function logo(int $size, string $file): array
 {
     if (!in_array($size, LOGO_SIZES, true) || !preg_match('/^bank\d{12}\.png$/', $file)) {

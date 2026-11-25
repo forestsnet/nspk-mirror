@@ -1,0 +1,7 @@
+services:
+  nginx:
+    ports:
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx/tls.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ${LETSENCRYPT_DIR:-./letsencrypt}:/etc/letsencrypt:ro

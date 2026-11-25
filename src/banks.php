@@ -1,5 +1,4 @@
 <?php
-// Список банков СБП и ссылки в их приложения, как их строит страница НСПК.
 declare(strict_types=1);
 
 namespace NspkMirror;

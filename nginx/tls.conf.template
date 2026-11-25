@@ -1,0 +1,41 @@
+# HTTPS с сертификатом Let's Encrypt из /etc/letsencrypt/live/${MIRROR_DOMAIN}/.
+# ${MIRROR_DOMAIN} подставляет envsubst официального образа nginx при старте.
+
+map $scheme $mirror_proto {
+    default $scheme;
+}
+
+limit_req_zone $binary_remote_addr zone=mirror:10m rate=10r/s;
+limit_req_status 429;
+
+server {
+    listen 80 default_server;
+    server_name ${MIRROR_DOMAIN};
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/acme;
+        default_type text/plain;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl default_server;
+    http2 on;
+    server_name ${MIRROR_DOMAIN};
+
+    ssl_certificate     /etc/letsencrypt/live/${MIRROR_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${MIRROR_DOMAIN}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    include /etc/nginx/snippets/mirror.conf;
+}

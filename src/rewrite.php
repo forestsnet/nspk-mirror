@@ -1,10 +1,8 @@
 <?php
-// Чистая логика зеркала qr.nspk.ru: куда проксировать запрос и как переписать адреса в ответе.
 declare(strict_types=1);
 
 namespace NspkMirror;
 
-/** Страница оплаты по QR и её статика. */
 const QR_HOST = 'qr.nspk.ru';
 
 /**
@@ -15,7 +13,7 @@ const CBR_PREFIX = '/_cbr/';
 const CBR_HOSTS = [
     'upc' => 'upc.cbrpay.ru',       // payment-link API, baseURL из proxyapp/apiConfig.json
     'widget' => 'widget.cbrpay.ru', // запасной payment-link API, зашит в js/index.js
-    'crt' => 'crt.cbrpay.ru',       // проверка certBanner. Не прошла — страница просит ставить сертификат Минцифры
+    'crt' => 'crt.cbrpay.ru',       // certBanner: без ответа страница просит поставить сертификат Минцифры
 ];
 
 /**

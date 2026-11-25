@@ -1,4 +1,9 @@
 .git
+.env
+.env.example
+letsencrypt
+nginx
 node_modules
+docker-compose*.yml
 README.md
 tests/e2e.cjs

@@ -1,5 +1,4 @@
 <?php
-// Проверки чистой логики зеркала: маршрутизация, переписывание URL, origin, банки и страница.
 // Запуск: docker compose exec mirror php /var/www/tests/unit_test.php
 declare(strict_types=1);
 
