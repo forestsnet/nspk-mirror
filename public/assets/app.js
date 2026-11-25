@@ -130,10 +130,35 @@
     drawQr();
   });
 
+  // На компьютере список банков живёт в модалке «Оплатить в интернет-банке».
+  // Без поддержки <dialog> остаётся раскрытие списком под кнопкой.
+  const sheet = document.getElementById('web-banks');
+  const banksPanel = document.getElementById('banks');
+  const useSheet = !isMobile && Boolean(sheet && banksPanel && typeof sheet.showModal === 'function');
+  if (useSheet) {
+    sheet.append(banksPanel);
+    sheet.addEventListener('click', (event) => {
+      const r = sheet.getBoundingClientRect();
+      const outside = event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom;
+      if (outside || event.target.closest('[data-close]')) sheet.close();
+    });
+  }
+
   // «Показать QR-код» на телефоне и «Оплатить в интернет-банке» на компьютере.
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   for (const btn of document.querySelectorAll('[data-toggle]')) {
+    if (useSheet && btn.dataset.toggle === 'show-banks') {
+      btn.removeAttribute('aria-expanded');
+      btn.setAttribute('aria-haspopup', 'dialog');
+      btn.setAttribute('aria-controls', sheet.id);
+    }
     btn.addEventListener('click', () => {
+      if (useSheet && btn.dataset.toggle === 'show-banks') {
+        filter();
+        sheet.showModal();
+        input?.focus();
+        return;
+      }
       const on = body.classList.toggle(btn.dataset.toggle);
       btn.setAttribute('aria-expanded', String(on));
       btn.querySelector('span').textContent = on ? btn.dataset.on : btn.dataset.off;

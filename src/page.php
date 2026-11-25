@@ -37,6 +37,7 @@ function icon(string $name): string
         'download' => '<path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/>',
         'chevron' => '<path d="m6 9 6 6 6-6"/>',
         'arrow' => '<path d="M7 7h10v10"/><path d="M7 17 17 7"/>',
+        'x' => '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
     ];
     return '<svg class="i" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"'
         . ' stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' . $paths[$name] . '</svg>';
@@ -82,7 +83,7 @@ function render_page(array $v): string
   </header>
 
   <section class="panel banks" id="banks" aria-labelledby="banks-title">
-    <h2 class="panel-title" id="banks-title"><span class="only-mobile">Выберите банк</span><span class="only-desktop">Интернет-банк в браузере</span></h2>
+    <h2 class="panel-title" id="banks-title">Выберите банк</h2>
     <label class="search">
       <?= icon('search') ?>
       <input type="search" placeholder="Поиск банка" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" aria-label="Поиск банка">
@@ -146,6 +147,17 @@ function render_page(array $v): string
     <p>Деньги списываются в приложении вашего банка</p>
   </footer>
 </main>
+
+<dialog class="sheet" id="web-banks" aria-labelledby="sheet-title">
+  <div class="sheet-head">
+    <div>
+      <h2 class="sheet-title" id="sheet-title">Интернет-банк в браузере</h2>
+      <p class="sheet-sub">Откроется сайт банка с этим платежом, останется войти и подтвердить</p>
+    </div>
+    <button class="sheet-close" type="button" data-close aria-label="Закрыть"><?= icon('x') ?></button>
+  </div>
+  <!-- На компьютере сюда переезжает список банков #banks -->
+</dialog>
 <script src="<?= h(asset('qrcode.js')) ?>" defer></script>
 <script src="<?= h(asset('app.js')) ?>" defer></script>
 </body>

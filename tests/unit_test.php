@@ -191,6 +191,7 @@ check('page app link', str_contains($html, "href=\"bank100000000111://qr.nspk.ru
 check('page escapes name', str_contains($html, '&lt;b&gt;Банк&lt;/b&gt;') && !str_contains($html, '<b>Банк</b>'), true);
 check('page qr data', str_contains($html, "data-app=\"https://qr.nspk.ru/$id\""), true);
 check('page amount', str_contains($html, '156,30<span class="cur">₽</span>'), true);
+check('page web banks dialog', str_contains($html, '<dialog class="sheet" id="web-banks" aria-labelledby="sheet-title">'), true);
 
 // Ресайз логотипа (нужен GD, он есть в образе).
 if (function_exists('imagecreatetruecolor')) {
