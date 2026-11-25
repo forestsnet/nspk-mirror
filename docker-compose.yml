@@ -1,0 +1,17 @@
+services:
+  mirror:
+    build: .
+    image: nspk-mirror:latest
+    container_name: nspk-mirror
+    restart: unless-stopped
+    environment:
+      # Публичный адрес зеркала, например https://sbp.example.com. Пусто — берётся из Host и X-Forwarded-Proto.
+      MIRROR_ORIGIN: ${MIRROR_ORIGIN:-}
+    ports:
+      - "127.0.0.1:8080:80"   # за nginx на хосте
+      - "127.0.0.1:8443:443"  # локальная проверка по HTTPS, сертификат самоподписанный
+    volumes:
+      - cache:/var/cache/nspk-mirror  # список банков, логотипы, статика НСПК
+
+volumes:
+  cache:
